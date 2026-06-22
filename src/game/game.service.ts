@@ -22,15 +22,52 @@ export class GameService {
     return user; // ✅ retourne toujours un utilisateur valide
   }
 
-  async getRandomQuestion(type: QuestionType) {
-    const questions = await this.prisma.question.findMany({
-      where: { type },
+  async getRandomQuestion(chatId: string, type: QuestionType) {
+    let session = await this.prisma.gameSession.findUnique({
+      where: { chatId },
     });
 
-    if (questions.length === 0) return null; // 🔧 FIX : évite undefined si DB vide
+    if (!session) {
+      session = await this.prisma.gameSession.create({
+        data: { chatId, history: [] },
+      });
+    }
+
+    const history = session.history || [];
+
+    let questions = await this.prisma.question.findMany({
+      where: {
+        type,
+        id: {
+          notIn: history,
+        },
+      },
+    });
+
+    if (questions.length === 0) {
+      questions = await this.prisma.question.findMany({
+        where: { type },
+      });
+
+      if (questions.length === 0) return null;
+
+      await this.prisma.gameSession.update({
+        where: { chatId },
+        data: { history: [] },
+      });
+    }
 
     const randomQuestion =
       questions[Math.floor(Math.random() * questions.length)];
+
+    await this.prisma.gameSession.update({
+      where: { chatId },
+      data: {
+        history: {
+          push: randomQuestion.id,
+        },
+      },
+    });
 
     return randomQuestion;
   }
@@ -50,13 +87,12 @@ export class GameService {
       update: {
         currentQuestionId: questionId || null,
         attempts,
-        ...(questionId && { history: { push: questionId } }),
       },
       create: {
         chatId,
         currentQuestionId: questionId || null,
         attempts,
-        history: questionId ? [questionId] : [],
+        history: [],
       },
     });
   }

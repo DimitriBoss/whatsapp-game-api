@@ -83,7 +83,7 @@ export class WhatsappService implements OnModuleInit {
             // Lance directement une première question
             const avTypes = [QuestionType.ACTION, QuestionType.VERITE];
             const avType = avTypes[Math.floor(Math.random() * avTypes.length)];
-            const avQuestion = await this.gameService.getRandomQuestion(avType);
+            const avQuestion = await this.gameService.getRandomQuestion(msg.from, avType);
             if (!avQuestion) {
               await msg.reply("😅 Aucune question disponible pour l'instant !");
             } else {
@@ -99,6 +99,7 @@ export class WhatsappService implements OnModuleInit {
               BotState.PLAYING_DEVINETTE,
             );
             const devinette = await this.gameService.getRandomQuestion(
+              msg.from,
               QuestionType.DEVINETTE,
             );
             if (!devinette) {
@@ -129,7 +130,7 @@ export class WhatsappService implements OnModuleInit {
           } else if (text === 'suivant') {
             const avTypes = [QuestionType.ACTION, QuestionType.VERITE];
             const avType = avTypes[Math.floor(Math.random() * avTypes.length)];
-            const question = await this.gameService.getRandomQuestion(avType);
+            const question = await this.gameService.getRandomQuestion(msg.from, avType);
             if (!question) {
               await msg.reply('😅 Plus de questions disponibles !');
             } else {
@@ -154,6 +155,7 @@ export class WhatsappService implements OnModuleInit {
             await msg.reply(`🏠 Menu :\n1️⃣ - Action / Vérité\n2️⃣ - Devinette`);
           } else if (text === 'suivant') {
             const devinette = await this.gameService.getRandomQuestion(
+              msg.from,
               QuestionType.DEVINETTE,
             );
             if (!devinette) {
