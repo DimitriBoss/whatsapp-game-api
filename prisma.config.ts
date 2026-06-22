@@ -7,6 +7,7 @@ export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
+    seed: "ts-node --compiler-options {\"module\":\"commonjs\"} prisma/seed.ts",
   },
   datasource: {
     // DIRECT_URL = session-mode pooler (port 5432), bypasses PgBouncer for migrations
