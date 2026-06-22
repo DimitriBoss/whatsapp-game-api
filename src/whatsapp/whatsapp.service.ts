@@ -85,12 +85,14 @@ export class WhatsappService implements OnModuleInit {
             `🎉 Bonjour à nouveau *${user.firstName}* ! Choisis un jeu :\n\n` +
               `1️⃣ - Action / Vérité\n\n` +
               `2️⃣ - Devinette\n\n` +
-              `Réponds avec *1* ou *2*`,
+              `Réponds avec *1* ou *2*\n\n` +
+              `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
           );
         } else {
           await this.gameService.updateUserState(msg.from, BotState.AWAITING_NAME);
           await msg.reply(
-            "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)",
+            "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)\n\n" +
+              "💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._",
           );
         }
         return;
@@ -109,7 +111,8 @@ export class WhatsappService implements OnModuleInit {
             BotState.AWAITING_NAME,
           );
           await msg.reply(
-            "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)",
+            "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)\n\n" +
+              "💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._",
           );
           break;
 
@@ -123,7 +126,8 @@ export class WhatsappService implements OnModuleInit {
             `🎉 Bonjour *${firstName}* ! Choisis un jeu :\n\n` +
               `1️⃣ - Action / Vérité\n\n` +
               `2️⃣ - Devinette\n\n` +
-              `Réponds avec *1* ou *2*`,
+              `Réponds avec *1* ou *2*\n\n` +
+              `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
           );
           break;
 
@@ -165,7 +169,8 @@ export class WhatsappService implements OnModuleInit {
             }
           } else {
             await msg.reply(
-              `❓ Choisis :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette`,
+              `❓ Choisis :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+                `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
             );
           }
           break;
