@@ -8,10 +8,15 @@ import { BotState, QuestionType } from '@prisma/client';
 export class WhatsappService implements OnModuleInit {
   constructor(private gameService: GameService) {}
   private client: Client;
+  private currentQr: string | null = null;
 
   // Cette méthode s'exécute automatiquement au lancement de NestJS
   onModuleInit() {
     this.initializeClient();
+  }
+
+  getCurrentQr(): string | null {
+    return this.currentQr;
   }
 
   private initializeClient() {
@@ -21,7 +26,8 @@ export class WhatsappService implements OnModuleInit {
       authStrategy: new LocalAuth(),
       webVersionCache: {
         type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041881976-alpha.html',
+        remotePath:
+          'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041881976-alpha.html',
       },
       puppeteer: {
         headless: true,
@@ -40,10 +46,18 @@ export class WhatsappService implements OnModuleInit {
 
     // 1. Générer le QR Code dans le terminal
     this.client.on('qr', (qr) => {
+      this.currentQr = qr;
       console.log('📱 Scanne ce QR Code avec ton WhatsApp pour lier le bot :');
       qrcode.generate(qr, { small: true });
-      console.log('🔗 Ou clique sur ce lien si le QR Code ci-dessus est déformé :');
-      console.log(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`);
+      console.log(
+        '🔗 Ou clique sur ce lien si le QR Code ci-dessus est déformé :',
+      );
+      console.log(
+        `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`,
+      );
+      console.log(
+        '🌐 Et si tu déploies sur Railway, tu peux aussi accéder au QR via : /qr',
+      );
     });
 
     // 2. Confirmer la connexion
@@ -53,7 +67,7 @@ export class WhatsappService implements OnModuleInit {
 
     // Gestion des erreurs d'authentification ou déconnexions
     this.client.on('auth_failure', (message) => {
-      console.error('❌ Échec de l\'authentification :', message);
+      console.error("❌ Échec de l'authentification :", message);
     });
 
     this.client.on('disconnected', (reason) => {
@@ -63,283 +77,317 @@ export class WhatsappService implements OnModuleInit {
     this.client.on('message', async (msg) => {
       try {
         // Récupère ou crée l'utilisateur à chaque message
-      const user = await this.gameService.getOrCreateUser(msg.from);
-      const text = msg.body.trim().toLowerCase(); // majuscule ou minuscule = pareil
+        const user = await this.gameService.getOrCreateUser(msg.from);
+        const text = msg.body.trim().toLowerCase(); // majuscule ou minuscule = pareil
 
-      const formLink = 'https://docs.google.com/forms/d/e/1FAIpQLScBKWZbglMZuXABR4r0QE3nbe4E5CFvVk-F_F-DwZaktS0nZg/viewform?usp=dialog';
-      const getFeedbackSuffix = (total: number) => {
-        if (total === 20 || total === 50 || total === 100) {
-          return `\n\n📝 *Votre avis nous intéresse !* Vous avez joué à ${total} questions. Merci de prendre 1 minute pour remplir ce formulaire de feedback : ${formLink}`;
-        }
-        return '';
-      };
-
-      // 🛑 Commande d'arrêt — disponible depuis n'importe quel état
-      if (text === '/stop' || text === '/close') {
-        await this.gameService.updateUserState(msg.from, BotState.STOPPED);
-        await this.gameService.updateGameSession(msg.from, null, 0);
-        await msg.reply(
-          "🛑 Le bot a été arrêté et mis en veille. Il n'enverra plus aucun message.\nPour recommencer à jouer, envoie */start* ou */restart*.",
-        );
-        return;
-      }
-
-      // 🔄 Commande de reset / start — disponible depuis n'importe quel état (y compris STOPPED)
-      if (text === '/reset' || text === '/start' || text === '/restart') {
-        await this.gameService.updateGameSession(msg.from, null, 0);
-        if (user.firstName) {
-          await this.gameService.updateUserState(msg.from, BotState.MAIN_MENU);
-          await msg.reply(
-            `🎉 Bonjour à nouveau *${user.firstName}* ! Choisis un jeu :\n\n` +
-              `1️⃣ - Action / Vérité\n\n` +
-              `2️⃣ - Devinette\n\n` +
-              `Réponds avec *1* ou *2*\n\n` +
-              `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
-          );
-        } else {
-          await this.gameService.updateUserState(msg.from, BotState.AWAITING_NAME);
-          await msg.reply(
-            "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)\n\n" +
-              "💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._",
-          );
-        }
-        return;
-      }
-
-      // 🤫 Si le bot est en veille (STOPPED), on ignore complètement tous les autres messages
-      if (user.botState === BotState.STOPPED) {
-        return;
-      }
-
-      switch (user.botState) {
-        // 1️⃣ Premier contact → demande le prénom
-        case 'START':
-          await this.gameService.updateUserState(
-            msg.from,
-            BotState.AWAITING_NAME,
-          );
-          await msg.reply(
-            "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)\n\n" +
-              "💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._",
-          );
-          break;
-
-        // 2️⃣ On reçoit le prénom → affiche le menu principal
-        case 'AWAITING_NAME':
-          // On utilise msg.body.trim() et non "text" pour garder la casse originale du prénom
-          const firstName = msg.body.trim();
-          await this.gameService.setUserFirstName(msg.from, firstName);
-          await this.gameService.updateUserState(msg.from, BotState.MAIN_MENU);
-          await msg.reply(
-            `🎉 Bonjour *${firstName}* ! Choisis un jeu :\n\n` +
-              `1️⃣ - Action / Vérité\n\n` +
-              `2️⃣ - Devinette\n\n` +
-              `Réponds avec *1* ou *2*\n\n` +
-              `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
-          );
-          break;
-
-        // 3️⃣ Menu principal → redirige vers le bon mode
-        case 'MAIN_MENU':
-          if (text === '1') {
-            await this.gameService.updateUserState(
-              msg.from,
-              BotState.PLAYING_ACTION_VERITE,
-            );
-            await msg.reply(
-              `🎭 *ACTION OU VÉRITÉ* 💬\n\n` +
-                `1️⃣ ou */action* - Recevoir une Action\n\n` +
-                `2️⃣ ou */verite* - Recevoir une Vérité\n\n` +
-                `0️⃣ ou */retour* - Retourner au menu principal\n\n` +
-                `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
-            );
-          } else if (text === '2') {
-            await this.gameService.updateUserState(
-              msg.from,
-              BotState.PLAYING_DEVINETTE,
-            );
-            const devinette = await this.gameService.getRandomQuestion(
-              msg.from,
-              QuestionType.DEVINETTE,
-            );
-            if (!devinette) {
-              await msg.reply(
-                "😅 Aucune devinette disponible pour l'instant !",
-              );
-            } else {
-              await this.gameService.updateGameSession(
-                msg.from,
-                devinette.id,
-                0,
-              );
-              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.DEVINETTE);
-              await msg.reply(
-                `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
-                  `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
-                  getFeedbackSuffix(totalPlayed),
-              );
-            }
-          } else {
-            await msg.reply(
-              `❓ Choisis :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
-                `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
-            );
+        const formLink =
+          'https://docs.google.com/forms/d/e/1FAIpQLScBKWZbglMZuXABR4r0QE3nbe4E5CFvVk-F_F-DwZaktS0nZg/viewform?usp=dialog';
+        const getFeedbackSuffix = (total: number) => {
+          if (total === 20 || total === 50 || total === 100) {
+            return `\n\n📝 *Votre avis nous intéresse !* Vous avez joué à ${total} questions. Merci de prendre 1 minute pour remplir ce formulaire de feedback : ${formLink}`;
           }
-          break;
+          return '';
+        };
 
-        // 4️⃣ Mode Action/Vérité → nouvelle question ou retour menu
-        case 'PLAYING_ACTION_VERITE':
-          if (text === '0' || text === '/retour') {
+        // 🛑 Commande d'arrêt — disponible depuis n'importe quel état
+        if (text === '/stop' || text === '/close') {
+          await this.gameService.updateUserState(msg.from, BotState.STOPPED);
+          await this.gameService.updateGameSession(msg.from, null, 0);
+          await msg.reply(
+            "🛑 Le bot a été arrêté et mis en veille. Il n'enverra plus aucun message.\nPour recommencer à jouer, envoie */start* ou */restart*.",
+          );
+          return;
+        }
+
+        // 🔄 Commande de reset / start — disponible depuis n'importe quel état (y compris STOPPED)
+        if (text === '/reset' || text === '/start' || text === '/restart') {
+          await this.gameService.updateGameSession(msg.from, null, 0);
+          if (user.firstName) {
             await this.gameService.updateUserState(
               msg.from,
               BotState.MAIN_MENU,
             );
             await msg.reply(
-              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+              `🎉 Bonjour à nouveau *${user.firstName}* ! Choisis un jeu :\n\n` +
+                `1️⃣ - Action / Vérité\n\n` +
+                `2️⃣ - Devinette\n\n` +
+                `Réponds avec *1* ou *2*\n\n` +
                 `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
             );
-          } else if (text === '1' || text === '/action') {
-            const question = await this.gameService.getRandomQuestion(
+          } else {
+            await this.gameService.updateUserState(
               msg.from,
-              QuestionType.ACTION,
+              BotState.AWAITING_NAME,
             );
-            if (!question) {
-              await msg.reply("😅 Plus d'actions disponibles !");
-            } else {
-              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.ACTION);
-              await msg.reply(
-                `🎭 *ACTION*\n\n${question.text}\n\n` +
-                  `_(Envoie *1* ou */action* pour une autre action, *2* ou */verite* pour une vérité, *0* ou */retour* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
-                  getFeedbackSuffix(totalPlayed),
-              );
-            }
-          } else if (text === '2' || text === '/verite' || text === '/vérité') {
-            const question = await this.gameService.getRandomQuestion(
-              msg.from,
-              QuestionType.VERITE,
+            await msg.reply(
+              "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)\n\n" +
+                '💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._',
             );
-            if (!question) {
-              await msg.reply('😅 Plus de vérités disponibles !');
-            } else {
-              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.VERITE);
-              await msg.reply(
-                `💬 *VÉRITÉ*\n\n${question.text}\n\n` +
-                  `_(Envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, *0* ou */retour* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
-                  getFeedbackSuffix(totalPlayed),
-              );
-            }
           }
-          // Tout autre message → silence
-          break;
+          return;
+        }
 
-        // 5️⃣ Mode Devinette → nouvelle devinette ou retour menu
-        case 'PLAYING_DEVINETTE':
-          if (text === '0' || text === '/retour') {
-            await this.gameService.updateGameSession(msg.from, null, 0);
+        // 🤫 Si le bot est en veille (STOPPED), on ignore complètement tous les autres messages
+        if (user.botState === BotState.STOPPED) {
+          return;
+        }
+
+        switch (user.botState) {
+          // 1️⃣ Premier contact → demande le prénom
+          case 'START':
+            await this.gameService.updateUserState(
+              msg.from,
+              BotState.AWAITING_NAME,
+            );
+            await msg.reply(
+              "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)\n\n" +
+                '💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._',
+            );
+            break;
+
+          // 2️⃣ On reçoit le prénom → affiche le menu principal
+          case 'AWAITING_NAME':
+            // On utilise msg.body.trim() et non "text" pour garder la casse originale du prénom
+            const firstName = msg.body.trim();
+            await this.gameService.setUserFirstName(msg.from, firstName);
             await this.gameService.updateUserState(
               msg.from,
               BotState.MAIN_MENU,
             );
             await msg.reply(
-              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+              `🎉 Bonjour *${firstName}* ! Choisis un jeu :\n\n` +
+                `1️⃣ - Action / Vérité\n\n` +
+                `2️⃣ - Devinette\n\n` +
+                `Réponds avec *1* ou *2*\n\n` +
                 `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
             );
-          } else if (text === 'suivant') {
-            const devinette = await this.gameService.getRandomQuestion(
-              msg.from,
-              QuestionType.DEVINETTE,
-            );
-            if (!devinette) {
-              await msg.reply('😅 Plus de devinettes disponibles !');
-            } else {
-              await this.gameService.updateGameSession(
+            break;
+
+          // 3️⃣ Menu principal → redirige vers le bon mode
+          case 'MAIN_MENU':
+            if (text === '1') {
+              await this.gameService.updateUserState(
                 msg.from,
-                devinette.id,
-                0,
+                BotState.PLAYING_ACTION_VERITE,
               );
-              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.DEVINETTE);
               await msg.reply(
-                `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
-                  `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
-                  getFeedbackSuffix(totalPlayed),
+                `🎭 *ACTION OU VÉRITÉ* 💬\n\n` +
+                  `1️⃣ ou */action* - Recevoir une Action\n\n` +
+                  `2️⃣ ou */verite* - Recevoir une Vérité\n\n` +
+                  `0️⃣ ou */retour* - Retourner au menu principal\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
               );
-            }
-          } else {
-            // Tentative de réponse
-            const session = await this.gameService.getGameSession(msg.from);
-            if (!session || !session.currentQuestionId) {
-              await msg.reply(
-                "🧩 Tu n'as pas de devinette active en ce moment.\nEnvoie *suivant* pour en obtenir une nouvelle, ou *0* pour le menu.",
+            } else if (text === '2') {
+              await this.gameService.updateUserState(
+                msg.from,
+                BotState.PLAYING_DEVINETTE,
               );
-            } else {
-              const question = await this.gameService.getQuestionById(
-                session.currentQuestionId,
+              const devinette = await this.gameService.getRandomQuestion(
+                msg.from,
+                QuestionType.DEVINETTE,
               );
-              if (!question || !question.answer) {
-                await this.gameService.updateGameSession(msg.from, null, 0);
+              if (!devinette) {
                 await msg.reply(
-                  "🧩 Cette devinette n'a pas de réponse configurée. Envoie *suivant* pour passer à la suivante.",
+                  "😅 Aucune devinette disponible pour l'instant !",
                 );
               } else {
-                const normalizedUserAnswer = this.normalizeText(msg.body);
-                const isCorrect = question.answer
-                  .split('|')
-                  .some((option) =>
-                    normalizedUserAnswer.includes(this.normalizeText(option)),
+                await this.gameService.updateGameSession(
+                  msg.from,
+                  devinette.id,
+                  0,
+                );
+                const totalPlayed =
+                  await this.gameService.incrementUserQuestionCount(
+                    msg.from,
+                    QuestionType.DEVINETTE,
                   );
+                await msg.reply(
+                  `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
+                    `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
+                    `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                    getFeedbackSuffix(totalPlayed),
+                );
+              }
+            } else {
+              await msg.reply(
+                `❓ Choisis :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+              );
+            }
+            break;
 
-                if (isCorrect) {
+          // 4️⃣ Mode Action/Vérité → nouvelle question ou retour menu
+          case 'PLAYING_ACTION_VERITE':
+            if (text === '0' || text === '/retour') {
+              await this.gameService.updateUserState(
+                msg.from,
+                BotState.MAIN_MENU,
+              );
+              await msg.reply(
+                `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+              );
+            } else if (text === '1' || text === '/action') {
+              const question = await this.gameService.getRandomQuestion(
+                msg.from,
+                QuestionType.ACTION,
+              );
+              if (!question) {
+                await msg.reply("😅 Plus d'actions disponibles !");
+              } else {
+                const totalPlayed =
+                  await this.gameService.incrementUserQuestionCount(
+                    msg.from,
+                    QuestionType.ACTION,
+                  );
+                await msg.reply(
+                  `🎭 *ACTION*\n\n${question.text}\n\n` +
+                    `_(Envoie *1* ou */action* pour une autre action, *2* ou */verite* pour une vérité, *0* ou */retour* pour le menu)_\n\n` +
+                    `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                    getFeedbackSuffix(totalPlayed),
+                );
+              }
+            } else if (
+              text === '2' ||
+              text === '/verite' ||
+              text === '/vérité'
+            ) {
+              const question = await this.gameService.getRandomQuestion(
+                msg.from,
+                QuestionType.VERITE,
+              );
+              if (!question) {
+                await msg.reply('😅 Plus de vérités disponibles !');
+              } else {
+                const totalPlayed =
+                  await this.gameService.incrementUserQuestionCount(
+                    msg.from,
+                    QuestionType.VERITE,
+                  );
+                await msg.reply(
+                  `💬 *VÉRITÉ*\n\n${question.text}\n\n` +
+                    `_(Envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, *0* ou */retour* pour le menu)_\n\n` +
+                    `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                    getFeedbackSuffix(totalPlayed),
+                );
+              }
+            }
+            // Tout autre message → silence
+            break;
+
+          // 5️⃣ Mode Devinette → nouvelle devinette ou retour menu
+          case 'PLAYING_DEVINETTE':
+            if (text === '0' || text === '/retour') {
+              await this.gameService.updateGameSession(msg.from, null, 0);
+              await this.gameService.updateUserState(
+                msg.from,
+                BotState.MAIN_MENU,
+              );
+              await msg.reply(
+                `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+              );
+            } else if (text === 'suivant') {
+              const devinette = await this.gameService.getRandomQuestion(
+                msg.from,
+                QuestionType.DEVINETTE,
+              );
+              if (!devinette) {
+                await msg.reply('😅 Plus de devinettes disponibles !');
+              } else {
+                await this.gameService.updateGameSession(
+                  msg.from,
+                  devinette.id,
+                  0,
+                );
+                const totalPlayed =
+                  await this.gameService.incrementUserQuestionCount(
+                    msg.from,
+                    QuestionType.DEVINETTE,
+                  );
+                await msg.reply(
+                  `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
+                    `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
+                    `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                    getFeedbackSuffix(totalPlayed),
+                );
+              }
+            } else {
+              // Tentative de réponse
+              const session = await this.gameService.getGameSession(msg.from);
+              if (!session || !session.currentQuestionId) {
+                await msg.reply(
+                  "🧩 Tu n'as pas de devinette active en ce moment.\nEnvoie *suivant* pour en obtenir une nouvelle, ou *0* pour le menu.",
+                );
+              } else {
+                const question = await this.gameService.getQuestionById(
+                  session.currentQuestionId,
+                );
+                if (!question || !question.answer) {
                   await this.gameService.updateGameSession(msg.from, null, 0);
-                  const firstAnswer = question.answer.split('|')[0];
                   await msg.reply(
-                    `🎉 *Félicitations !* C'est la bonne réponse ! 🥳\n` +
-                      `La réponse était bien : *${firstAnswer}*\n\n` +
-                      `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_\n\n` +
-                      `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+                    "🧩 Cette devinette n'a pas de réponse configurée. Envoie *suivant* pour passer à la suivante.",
                   );
                 } else {
-                  const newAttempts = session.attempts + 1;
-                  if (newAttempts < 3) {
-                    await this.gameService.updateGameSession(
-                      msg.from,
-                      question.id,
-                      newAttempts,
+                  const normalizedUserAnswer = this.normalizeText(msg.body);
+                  const isCorrect = question.answer
+                    .split('|')
+                    .some((option) =>
+                      normalizedUserAnswer.includes(this.normalizeText(option)),
                     );
-                    const remaining = 3 - newAttempts;
-                    await msg.reply(
-                      `❌ *Mauvaise réponse !*\n` +
-                        `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :\n\n` +
-                        `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
-                    );
-                  } else {
+
+                  if (isCorrect) {
                     await this.gameService.updateGameSession(msg.from, null, 0);
                     const firstAnswer = question.answer.split('|')[0];
                     await msg.reply(
-                      `❌ *Dommage !* C'était ta dernière tentative.\n` +
-                        `💡 La bonne réponse était : *${firstAnswer}*.\n\n` +
+                      `🎉 *Félicitations !* C'est la bonne réponse ! 🥳\n` +
+                        `La réponse était bien : *${firstAnswer}*\n\n` +
                         `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_\n\n` +
                         `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
                     );
+                  } else {
+                    const newAttempts = session.attempts + 1;
+                    if (newAttempts < 3) {
+                      await this.gameService.updateGameSession(
+                        msg.from,
+                        question.id,
+                        newAttempts,
+                      );
+                      const remaining = 3 - newAttempts;
+                      await msg.reply(
+                        `❌ *Mauvaise réponse !*\n` +
+                          `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :\n\n` +
+                          `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+                      );
+                    } else {
+                      await this.gameService.updateGameSession(
+                        msg.from,
+                        null,
+                        0,
+                      );
+                      const firstAnswer = question.answer.split('|')[0];
+                      await msg.reply(
+                        `❌ *Dommage !* C'était ta dernière tentative.\n` +
+                          `💡 La bonne réponse était : *${firstAnswer}*.\n\n` +
+                          `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_\n\n` +
+                          `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+                      );
+                    }
                   }
                 }
               }
             }
-          }
-          break;
-      }
+            break;
+        }
       } catch (error) {
         console.error('❌ Erreur lors du traitement du message :', error);
         try {
           await msg.reply(
-            "⚠️ Une erreur temporaire est survenue lors du traitement de ta demande. Réessaie dans un instant.",
+            '⚠️ Une erreur temporaire est survenue lors du traitement de ta demande. Réessaie dans un instant.',
           );
         } catch (replyError) {
           console.error(
-            '❌ Impossible d\'envoyer le message de défaillance :',
+            "❌ Impossible d'envoyer le message de défaillance :",
             replyError,
           );
         }
