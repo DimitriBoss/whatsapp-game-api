@@ -143,7 +143,8 @@ export class WhatsappService implements OnModuleInit {
               `🎭 *ACTION OU VÉRITÉ* 💬\n\n` +
                 `1️⃣ ou */action* - Recevoir une Action\n\n` +
                 `2️⃣ ou */verite* - Recevoir une Vérité\n\n` +
-                `0️⃣ ou */retour* - Retourner au menu principal`,
+                `0️⃣ ou */retour* - Retourner au menu principal\n\n` +
+                `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
             );
           } else if (text === '2') {
             await this.gameService.updateUserState(
@@ -165,7 +166,9 @@ export class WhatsappService implements OnModuleInit {
                 0,
               );
               await msg.reply(
-                `🧩 *DEVINETTE*\n\n${devinette.text}\n\n_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_`,
+                `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
+                  `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
               );
             }
           } else {
@@ -184,7 +187,8 @@ export class WhatsappService implements OnModuleInit {
               BotState.MAIN_MENU,
             );
             await msg.reply(
-              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette`,
+              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+                `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
             );
           } else if (text === '1' || text === '/action') {
             const question = await this.gameService.getRandomQuestion(
@@ -196,7 +200,8 @@ export class WhatsappService implements OnModuleInit {
             } else {
               await msg.reply(
                 `🎭 *ACTION*\n\n${question.text}\n\n` +
-                  `_(Envoie *1* ou */action* pour une autre action, *2* ou */verite* pour une vérité, *0* ou */retour* pour le menu)_`,
+                  `_(Envoie *1* ou */action* pour une autre action, *2* ou */verite* pour une vérité, *0* ou */retour* pour le menu)_\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
               );
             }
           } else if (text === '2' || text === '/verite' || text === '/vérité') {
@@ -209,7 +214,8 @@ export class WhatsappService implements OnModuleInit {
             } else {
               await msg.reply(
                 `💬 *VÉRITÉ*\n\n${question.text}\n\n` +
-                  `_(Envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, *0* ou */retour* pour le menu)_`,
+                  `_(Envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, *0* ou */retour* pour le menu)_\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
               );
             }
           }
@@ -225,7 +231,8 @@ export class WhatsappService implements OnModuleInit {
               BotState.MAIN_MENU,
             );
             await msg.reply(
-              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette`,
+              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette\n\n` +
+                `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
             );
           } else if (text === 'suivant') {
             const devinette = await this.gameService.getRandomQuestion(
@@ -241,7 +248,9 @@ export class WhatsappService implements OnModuleInit {
                 0,
               );
               await msg.reply(
-                `🧩 *DEVINETTE*\n\n${devinette.text}\n\n_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_`,
+                `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
+                  `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
               );
             }
           } else {
@@ -274,7 +283,8 @@ export class WhatsappService implements OnModuleInit {
                   await msg.reply(
                     `🎉 *Félicitations !* C'est la bonne réponse ! 🥳\n` +
                       `La réponse était bien : *${firstAnswer}*\n\n` +
-                      `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_`,
+                      `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_\n\n` +
+                      `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
                   );
                 } else {
                   const newAttempts = session.attempts + 1;
@@ -287,7 +297,8 @@ export class WhatsappService implements OnModuleInit {
                     const remaining = 3 - newAttempts;
                     await msg.reply(
                       `❌ *Mauvaise réponse !*\n` +
-                        `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :`,
+                        `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :\n\n` +
+                        `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
                     );
                   } else {
                     await this.gameService.updateGameSession(msg.from, null, 0);
@@ -295,7 +306,8 @@ export class WhatsappService implements OnModuleInit {
                     await msg.reply(
                       `❌ *Dommage !* C'était ta dernière tentative.\n` +
                         `💡 La bonne réponse était : *${firstAnswer}*.\n\n` +
-                        `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_`,
+                        `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_\n\n` +
+                        `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
                     );
                   }
                 }
