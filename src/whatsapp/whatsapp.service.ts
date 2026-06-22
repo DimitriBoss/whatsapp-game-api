@@ -19,6 +19,18 @@ export class WhatsappService implements OnModuleInit {
     // Ça évite de devoir rescanner le QR code à chaque redémarrage du serveur
     this.client = new Client({
       authStrategy: new LocalAuth(),
+      puppeteer: {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+        ],
+      },
     });
 
     // 1. Générer le QR Code dans le terminal
@@ -32,9 +44,19 @@ export class WhatsappService implements OnModuleInit {
       console.log('✅ Bot WhatsApp connecté avec succès !');
     });
 
+    // Gestion des erreurs d'authentification ou déconnexions
+    this.client.on('auth_failure', (message) => {
+      console.error('❌ Échec de l\'authentification :', message);
+    });
+
+    this.client.on('disconnected', (reason) => {
+      console.error('❌ Le client WhatsApp a été déconnecté :', reason);
+    });
+
     // 3. Écouter les messages entrants
     this.client.on('message', async (msg) => {
-      // Récupère ou crée l'utilisateur à chaque message
+      try {
+        // Récupère ou crée l'utilisateur à chaque message
       const user = await this.gameService.getOrCreateUser(msg.from);
       const text = msg.body.trim().toLowerCase(); // majuscule ou minuscule = pareil
 
@@ -67,7 +89,7 @@ export class WhatsappService implements OnModuleInit {
           await this.gameService.updateUserState(msg.from, BotState.MAIN_MENU);
           await msg.reply(
             `🎉 Bonjour *${firstName}* ! Choisis un jeu :\n\n` +
-              `1️⃣ - Action / Vérité\n` +
+              `1️⃣ - Action / Vérité\n\n` +
               `2️⃣ - Devinette\n\n` +
               `Réponds avec *1* ou *2*`,
           );
@@ -80,19 +102,12 @@ export class WhatsappService implements OnModuleInit {
               msg.from,
               BotState.PLAYING_ACTION_VERITE,
             );
-            // Lance directement une première question
-            const avTypes = [QuestionType.ACTION, QuestionType.VERITE];
-            const avType = avTypes[Math.floor(Math.random() * avTypes.length)];
-            const avQuestion = await this.gameService.getRandomQuestion(msg.from, avType);
-            if (!avQuestion) {
-              await msg.reply("😅 Aucune question disponible pour l'instant !");
-            } else {
-              const emoji =
-                avType === QuestionType.ACTION ? '🎭 *ACTION*' : '💬 *VÉRITÉ*';
-              await msg.reply(
-                `${emoji}\n\n${avQuestion.text}\n\n_(Envoie *suivant* pour une autre question, *0* pour le menu)_`,
-              );
-            }
+            await msg.reply(
+              `🎭 *ACTION OU VÉRITÉ* 💬\n\n` +
+                `1️⃣ ou */action* - Recevoir une Action\n\n` +
+                `2️⃣ ou */verite* - Recevoir une Vérité\n\n` +
+                `0️⃣ ou */retour* - Retourner au menu principal`,
+            );
           } else if (text === '2') {
             await this.gameService.updateUserState(
               msg.from,
@@ -107,37 +122,56 @@ export class WhatsappService implements OnModuleInit {
                 "😅 Aucune devinette disponible pour l'instant !",
               );
             } else {
-              await this.gameService.updateGameSession(msg.from, devinette.id, 0);
+              await this.gameService.updateGameSession(
+                msg.from,
+                devinette.id,
+                0,
+              );
               await msg.reply(
                 `🧩 *DEVINETTE*\n\n${devinette.text}\n\n_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_`,
               );
             }
           } else {
             await msg.reply(
-              `❓ Choisis :\n1️⃣ - Action / Vérité\n2️⃣ - Devinette`,
+              `❓ Choisis :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette`,
             );
           }
           break;
 
         // 4️⃣ Mode Action/Vérité → nouvelle question ou retour menu
         case 'PLAYING_ACTION_VERITE':
-          if (text === '0') {
+          if (text === '0' || text === '/retour') {
             await this.gameService.updateUserState(
               msg.from,
               BotState.MAIN_MENU,
             );
-            await msg.reply(`🏠 Menu :\n1️⃣ - Action / Vérité\n2️⃣ - Devinette`);
-          } else if (text === 'suivant') {
-            const avTypes = [QuestionType.ACTION, QuestionType.VERITE];
-            const avType = avTypes[Math.floor(Math.random() * avTypes.length)];
-            const question = await this.gameService.getRandomQuestion(msg.from, avType);
+            await msg.reply(
+              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette`,
+            );
+          } else if (text === '1' || text === '/action') {
+            const question = await this.gameService.getRandomQuestion(
+              msg.from,
+              QuestionType.ACTION,
+            );
             if (!question) {
-              await msg.reply('😅 Plus de questions disponibles !');
+              await msg.reply("😅 Plus d'actions disponibles !");
             } else {
-              const emoji =
-                avType === QuestionType.ACTION ? '🎭 *ACTION*' : '💬 *VÉRITÉ*';
               await msg.reply(
-                `${emoji}\n\n${question.text}\n\n_(Envoie *suivant* pour une autre, *0* pour le menu)_`,
+                `🎭 *ACTION*\n\n${question.text}\n\n` +
+                  `_(Envoie *1* ou */action* pour une autre action, *2* ou */verite* pour une vérité, *0* ou */retour* pour le menu)_`,
+              );
+            }
+          } else if (text === '2' || text === '/verite' || text === '/vérité') {
+            const question = await this.gameService.getRandomQuestion(
+              msg.from,
+              QuestionType.VERITE,
+            );
+            if (!question) {
+              await msg.reply('😅 Plus de vérités disponibles !');
+            } else {
+              await msg.reply(
+                `💬 *VÉRITÉ*\n\n${question.text}\n\n` +
+                  `_(Envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, *0* ou */retour* pour le menu)_`,
               );
             }
           }
@@ -146,13 +180,15 @@ export class WhatsappService implements OnModuleInit {
 
         // 5️⃣ Mode Devinette → nouvelle devinette ou retour menu
         case 'PLAYING_DEVINETTE':
-          if (text === '0') {
+          if (text === '0' || text === '/retour') {
             await this.gameService.updateGameSession(msg.from, null, 0);
             await this.gameService.updateUserState(
               msg.from,
               BotState.MAIN_MENU,
             );
-            await msg.reply(`🏠 Menu :\n1️⃣ - Action / Vérité\n2️⃣ - Devinette`);
+            await msg.reply(
+              `🏠 Menu :\n\n1️⃣ - Action / Vérité\n\n2️⃣ - Devinette`,
+            );
           } else if (text === 'suivant') {
             const devinette = await this.gameService.getRandomQuestion(
               msg.from,
@@ -161,7 +197,11 @@ export class WhatsappService implements OnModuleInit {
             if (!devinette) {
               await msg.reply('😅 Plus de devinettes disponibles !');
             } else {
-              await this.gameService.updateGameSession(msg.from, devinette.id, 0);
+              await this.gameService.updateGameSession(
+                msg.from,
+                devinette.id,
+                0,
+              );
               await msg.reply(
                 `🧩 *DEVINETTE*\n\n${devinette.text}\n\n_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_`,
               );
@@ -171,45 +211,53 @@ export class WhatsappService implements OnModuleInit {
             const session = await this.gameService.getGameSession(msg.from);
             if (!session || !session.currentQuestionId) {
               await msg.reply(
-                "🧩 Tu n'as pas de devinette active en ce moment.\nEnvoie *suivant* pour en obtenir une nouvelle, ou *0* pour le menu."
+                "🧩 Tu n'as pas de devinette active en ce moment.\nEnvoie *suivant* pour en obtenir une nouvelle, ou *0* pour le menu.",
               );
             } else {
-              const question = await this.gameService.getQuestionById(session.currentQuestionId);
+              const question = await this.gameService.getQuestionById(
+                session.currentQuestionId,
+              );
               if (!question || !question.answer) {
                 await this.gameService.updateGameSession(msg.from, null, 0);
                 await msg.reply(
-                  "🧩 Cette devinette n'a pas de réponse configurée. Envoie *suivant* pour passer à la suivante."
+                  "🧩 Cette devinette n'a pas de réponse configurée. Envoie *suivant* pour passer à la suivante.",
                 );
               } else {
                 const normalizedUserAnswer = this.normalizeText(msg.body);
-                const isCorrect = question.answer.split('|').some(option => 
-                  normalizedUserAnswer.includes(this.normalizeText(option))
-                );
+                const isCorrect = question.answer
+                  .split('|')
+                  .some((option) =>
+                    normalizedUserAnswer.includes(this.normalizeText(option)),
+                  );
 
                 if (isCorrect) {
                   await this.gameService.updateGameSession(msg.from, null, 0);
                   const firstAnswer = question.answer.split('|')[0];
                   await msg.reply(
                     `🎉 *Félicitations !* C'est la bonne réponse ! 🥳\n` +
-                    `La réponse était bien : *${firstAnswer}*\n\n` +
-                    `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_`
+                      `La réponse était bien : *${firstAnswer}*\n\n` +
+                      `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_`,
                   );
                 } else {
                   const newAttempts = session.attempts + 1;
                   if (newAttempts < 3) {
-                    await this.gameService.updateGameSession(msg.from, question.id, newAttempts);
+                    await this.gameService.updateGameSession(
+                      msg.from,
+                      question.id,
+                      newAttempts,
+                    );
                     const remaining = 3 - newAttempts;
                     await msg.reply(
                       `❌ *Mauvaise réponse !*\n` +
-                      `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :`
+                        `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :`,
                     );
                   } else {
                     await this.gameService.updateGameSession(msg.from, null, 0);
                     const firstAnswer = question.answer.split('|')[0];
                     await msg.reply(
                       `❌ *Dommage !* C'était ta dernière tentative.\n` +
-                      `💡 La bonne réponse était : *${firstAnswer}*.\n\n` +
-                      `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_`
+                        `💡 La bonne réponse était : *${firstAnswer}*.\n\n` +
+                        `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_`,
                     );
                   }
                 }
@@ -217,6 +265,19 @@ export class WhatsappService implements OnModuleInit {
             }
           }
           break;
+      }
+      } catch (error) {
+        console.error('❌ Erreur lors du traitement du message :', error);
+        try {
+          await msg.reply(
+            "⚠️ Une erreur temporaire est survenue lors du traitement de ta demande. Réessaie dans un instant.",
+          );
+        } catch (replyError) {
+          console.error(
+            '❌ Impossible d\'envoyer le message de défaillance :',
+            replyError,
+          );
+        }
       }
     });
 

@@ -1,98 +1,100 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 🎮 WhatsApp Game Bot API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Une API de bot WhatsApp interactive et robuste construite avec **NestJS**, **Prisma** et **PostgreSQL/Supabase**. Ce bot permet d'animer des discussions privées ou de groupes en proposant des jeux cultes adaptés aux réalités culturelles béninoises/africaines.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## ✨ Fonctionnalités Majeures (MVP)
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+*   **🎮 Deux Modes de Jeu Riches** :
+    *   **Action / Vérité** : Avec un sous-menu dédié permettant de choisir explicitement entre une Action (`/action` ou `1`) et une Vérité (`/verite` ou `2`).
+    *   **Devinettes (Riddles)** : Une énigme est proposée, et le joueur dispose de **3 tentatives** pour répondre.
+*   **🧠 Système d'Historique sans Doublons** : Le bot suit les questions déjà posées à chaque joueur (via son `chatId`) pour éviter de lui renvoyer deux fois la même question au cours d'une partie. L'historique se réinitialise automatiquement lorsque toutes les questions ont été posées.
+*   **🎯 Normalisation Inteligente & Synonymes locaux** :
+    *   Les réponses des joueurs sont nettoyées automatiquement (suppression des accents, de la ponctuation, des majuscules et des espaces inutiles).
+    *   Les réponses intègrent des synonymes adaptés à la réalité béninoise (ex: la réponse à la devinette sur l'habit accepte *corde*, *fil* ou *élastique* ; la bouillie accepte *bouillie*, *akui* ou *koko*).
+*   **🌱 Base de Données Pré-peuplée (300 Questions)** :
+    *   100 Actions drôles et engageantes (ex: imiter un conducteur de Zémidjan sous le soleil).
+    *   100 Vérités croustillantes.
+    *   100 Devinettes stimulantes.
+*   **⚡ Résilient et Stable pour la Production** :
+    *   **Zéro crash** : Tous les événements de message sont enveloppés dans un bloc `try...catch` global. Si la base de données subit une micro-coupure ou si WhatsApp échoue, le bot reste en ligne.
+    *   **Optimisation RAM** : Chromium est configuré pour consommer un minimum de ressources (indispensable sur VPS ou Docker de type Railway).
 
-## Project setup
+---
 
+## 🛠️ Stack Technique
+
+*   **Framework** : NestJS (Node.js)
+*   **ORM** : Prisma 7
+*   **Base de Données** : PostgreSQL / Supabase
+*   **API WhatsApp** : `whatsapp-web.js` (qui pilote une instance headless de Chromium)
+
+---
+
+## 📦 Installation et Lancement Local
+
+### 1. Cloner et installer les dépendances
 ```bash
-$ npm install
+git clone https://github.com/DimitriBoss/whatsapp-game-api.git
+cd whatsapp-game-api
+npm install
 ```
 
-## Compile and run the project
-
-```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+### 2. Variables d'environnement
+Crée un fichier `.env` à la racine du projet et configure tes accès :
+```env
+DATABASE_URL="postgresql://user:password@host:port/database"
+PORT=3000
 ```
 
-## Run tests
-
+### 3. Appliquer le schéma de base de données
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npx prisma migrate dev
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
+### 4. Remplir la base de données (Seeding)
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npx prisma db seed
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### 5. Lancer l'application
+```bash
+npm run start:dev
+```
+Scanne le QR Code généré directement dans ton terminal avec ton application WhatsApp (Appareils connectés) pour lier le bot.
 
-## Resources
+---
 
-Check out a few resources that may come in handy when working with NestJS:
+## 🚀 Déploiement sur Railway
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+Railway est idéal pour héberger cette application NestJS + PostgreSQL.
 
-## Support
+### Étape 1 : Créer la Base de Données
+Vous pouvez utiliser votre base de données **Supabase** existante ou provisionner un service **PostgreSQL** directement sur Railway.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### Étape 2 : Configurer les Variables d'Environnement sur Railway
+Dans ton projet Railway, ajoute les variables d'environnement suivantes dans l'onglet **Variables** :
+*   `DATABASE_URL` : L'URL de connexion à ta base PostgreSQL (Supabase ou PostgreSQL Railway).
+*   `PORT` : `3000` (Railway injecte cette variable automatiquement).
 
-## Stay in touch
+### Étape 3 : Spécifier le build de production
+Assure-toi que Railway utilise la commande de build et de démarrage configurée dans `package.json` :
+*   Build Command : `npm run build`
+*   Start Command : `npm run start:prod`
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+*(Note : Avant le premier démarrage en production, assure-toi d'avoir exécuté la migration et le seed sur ton instance de production via les commandes Prisma).*
 
-## License
+### Étape 4 : Lier ton WhatsApp
+Une fois le déploiement lancé sur Railway, ouvre l'onglet **Lignes de commande/Logs** du service. 
+Lors du premier démarrage, le QR Code de connexion s'affichera directement dans les logs de Railway. Scanne-le une fois avec ton téléphone pour initialiser la session. Grâce à `LocalAuth`, le bot conservera sa session active lors des redémarrages.
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+---
+
+## 💬 Commandes Utilisateur Clés
+
+*   **`/reset`** : Réinitialise complètement l'état du joueur et le ramène au message d'accueil initial (demande de prénom) depuis n'importe quel écran.
+*   **`0` ou `/retour`** : Retourne au menu précédent (depuis le mode Action/Vérité ou le mode Devinette).
+*   **`1` ou `/action`** : Demande une question d'Action (en mode Action/Vérité).
+*   **`2` ou `/verite`** : Demande une question de Vérité (en mode Action/Vérité).
+*   **`suivant`** : Demande une nouvelle devinette (en mode Devinette).
