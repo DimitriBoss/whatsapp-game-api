@@ -62,12 +62,38 @@ export class WhatsappService implements OnModuleInit {
       const user = await this.gameService.getOrCreateUser(msg.from);
       const text = msg.body.trim().toLowerCase(); // majuscule ou minuscule = pareil
 
-      // 🔄 Commande de reset — disponible depuis n'importe quel état
-      if (text === '/reset') {
-        await this.gameService.updateUserState(msg.from, BotState.START);
+      // 🛑 Commande d'arrêt — disponible depuis n'importe quel état
+      if (text === '/stop' || text === '/close') {
+        await this.gameService.updateUserState(msg.from, BotState.STOPPED);
+        await this.gameService.updateGameSession(msg.from, null, 0);
         await msg.reply(
-          "♻️ Partie réinitialisée !\nEnvoie n'importe quel message pour recommencer.",
+          "🛑 Le bot a été arrêté et mis en veille. Il n'enverra plus aucun message.\nPour recommencer à jouer, envoie */start* ou */restart*.",
         );
+        return;
+      }
+
+      // 🔄 Commande de reset / start — disponible depuis n'importe quel état (y compris STOPPED)
+      if (text === '/reset' || text === '/start' || text === '/restart') {
+        await this.gameService.updateGameSession(msg.from, null, 0);
+        if (user.firstName) {
+          await this.gameService.updateUserState(msg.from, BotState.MAIN_MENU);
+          await msg.reply(
+            `🎉 Bonjour à nouveau *${user.firstName}* ! Choisis un jeu :\n\n` +
+              `1️⃣ - Action / Vérité\n\n` +
+              `2️⃣ - Devinette\n\n` +
+              `Réponds avec *1* ou *2*`,
+          );
+        } else {
+          await this.gameService.updateUserState(msg.from, BotState.AWAITING_NAME);
+          await msg.reply(
+            "👋 Bienvenue sur *GameBot* !\nComment tu t'appelles ? (Envoie ton prénom)",
+          );
+        }
+        return;
+      }
+
+      // 🤫 Si le bot est en veille (STOPPED), on ignore complètement tous les autres messages
+      if (user.botState === BotState.STOPPED) {
         return;
       }
 

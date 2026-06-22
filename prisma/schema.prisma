@@ -19,6 +19,7 @@ enum BotState {
   MAIN_MENU
   PLAYING_ACTION_VERITE
   PLAYING_DEVINETTE
+  STOPPED
 }
 
 enum QuestionType {
