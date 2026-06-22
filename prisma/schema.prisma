@@ -1,0 +1,62 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// --- ENUMS ---
+
+enum BotState {
+  START
+  AWAITING_NAME
+  MAIN_MENU
+  PLAYING_ACTION_VERITE
+  PLAYING_DEVINETTE
+}
+
+enum QuestionType {
+  ACTION
+  VERITE
+  DEVINETTE
+}
+
+// --- MODELES ---
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  phoneNumber  String    @unique // Ex: "+229XXXXXXXX"
+  firstName    String?   // Prénom
+  lastName     String?   // Nom
+  botState     BotState  @default(START) // État actuel dans le jeu
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("users")
+}
+
+model Question {
+  id        String       @id @default(uuid()) @db.Uuid
+  text      String
+  type      QuestionType // Uniquement ACTION, VERITE ou DEVINETTE
+  createdAt DateTime     @default(now())
+
+  @@map("questions")
+}
+
+model GameSession {
+  id                String   @id @default(uuid()) @db.Uuid
+  chatId            String   @unique // ID du groupe WhatsApp ou numéro
+  currentQuestionId String?  @db.Uuid // ID de la devinette en cours (vide si Action/Vérité)
+  history           String[] @db.Uuid // Historique pour éviter de répéter les mêmes questions
+  updatedAt         DateTime @updatedAt
+
+  @@map("game_sessions")
+}
