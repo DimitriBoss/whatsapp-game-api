@@ -1,6 +1,9 @@
 # 🎮 WhatsApp Game Bot API
 
-Une API de bot WhatsApp interactive et robuste construite avec **NestJS**, **Prisma** et **PostgreSQL/Supabase**. Ce bot permet d'animer des discussions privées ou de groupes en proposant des jeux cultes adaptés aux réalités culturelles béninoises/africaines.
+🚀 **Bot de Jeu WhatsApp MVP prêt pour la production !**  
+📞 **Numéro de téléphone officiel du Bot** : [+229 01 906 21514](https://wa.me/2290190621514) (Envoie un message pour commencer à jouer !)
+
+Une API de bot WhatsApp interactive et robuste construite avec **NestJS**, **Prisma** et **PostgreSQL/Supabase**. Ce bot permet de jouer en solo ou d'animer des discussions en proposant des jeux cultes adaptés aux réalités culturelles béninoises/africaines.
 
 ---
 
@@ -86,15 +89,21 @@ Assure-toi que Railway utilise la commande de build et de démarrage configurée
 *(Note : Avant le premier démarrage en production, assure-toi d'avoir exécuté la migration et le seed sur ton instance de production via les commandes Prisma).*
 
 ### Étape 4 : Lier ton WhatsApp
-Une fois le déploiement lancé sur Railway, ouvre l'onglet **Lignes de commande/Logs** du service. 
-Lors du premier démarrage, le QR Code de connexion s'affichera directement dans les logs de Railway. Scanne-le une fois avec ton téléphone pour initialiser la session. Grâce à `LocalAuth`, le bot conservera sa session active lors des redémarrages.
+Une fois le déploiement lancé sur Railway, ouvre l'onglet **Logs** de votre service. 
+Lors du premier démarrage, le QR Code de connexion s'affichera directement dans les logs de Railway. 
+
+💡 **Astuce de liaison** : Si le QR code terminal est déformé, un lien cliquable `https://api.qrserver.com/...` s'affiche aussi dans les logs. Clique dessus pour afficher une image de QR Code HD parfaite à scanner avec ton téléphone (*Paramètres > Appareils connectés*).
+
+Grâce à la stratégie `LocalAuth` et à la simulation d'un User-Agent de bureau (`Chrome 122` sur Windows), le bot conserve sa session active et s'authentifie sans risque de blocage.
 
 ---
 
 ## 💬 Commandes Utilisateur Clés
 
-*   **`/reset`** : Réinitialise complètement l'état du joueur et le ramène au message d'accueil initial (demande de prénom) depuis n'importe quel écran.
-*   **`0` ou `/retour`** : Retourne au menu précédent (depuis le mode Action/Vérité ou le mode Devinette).
-*   **`1` ou `/action`** : Demande une question d'Action (en mode Action/Vérité).
-*   **`2` ou `/verite`** : Demande une question de Vérité (en mode Action/Vérité).
+*   **`/stop` ou `/close`** : Met le bot en pause/veille complète. Le bot devient totalement silencieux et ignore les messages pour ne pas perturber vos autres conversations.
+*   **`/start` ou `/restart`** : Réveille et réactive le bot à tout moment, vous redirigeant vers l'accueil ou le menu principal.
+*   **`/reset`** : Réinitialise complètement l'état d'avancement de votre partie.
+*   **`0` ou `/retour`** : Retourne au menu précédent (depuis le sous-menu d'Action/Vérité ou le jeu de Devinettes).
+*   **`1` ou `/action`** : Demande une nouvelle question d'Action (en mode Action/Vérité).
+*   **`2` ou `/verite` ou `/vérité`** : Demande une nouvelle question de Vérité (en mode Action/Vérité).
 *   **`suivant`** : Demande une nouvelle devinette (en mode Devinette).
