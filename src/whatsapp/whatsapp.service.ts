@@ -23,7 +23,6 @@ export class WhatsappService implements OnModuleInit {
         type: 'remote',
         remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041881976-alpha.html',
       },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       puppeteer: {
         headless: true,
         args: [
@@ -34,6 +33,7 @@ export class WhatsappService implements OnModuleInit {
           '--no-first-run',
           '--no-zygote',
           '--disable-gpu',
+          '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         ],
       },
     });
