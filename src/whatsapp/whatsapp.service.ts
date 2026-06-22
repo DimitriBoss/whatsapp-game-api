@@ -219,6 +219,7 @@ export class WhatsappService implements OnModuleInit {
           // 4️⃣ Mode Action/Vérité → nouvelle question ou retour menu
           case 'PLAYING_ACTION_VERITE':
             if (text === '0' || text === '/retour') {
+              await this.gameService.updateGameSession(msg.from, null, 0);
               await this.gameService.updateUserState(
                 msg.from,
                 BotState.MAIN_MENU,
@@ -240,9 +241,14 @@ export class WhatsappService implements OnModuleInit {
                     msg.from,
                     QuestionType.ACTION,
                   );
+                await this.gameService.updateGameSession(
+                  msg.from,
+                  question.id,
+                  0,
+                );
                 await msg.reply(
                   `🎭 *ACTION*\n\n${question.text}\n\n` +
-                    `_(Envoie *1* ou */action* pour une autre action, *2* ou */verite* pour une vérité, *0* ou */retour* pour le menu)_\n\n` +
+                    `_(Fais l'action, puis envoie *ok* quand c'est fait. Je ne peux pas vérifier si elle a été faite, mais je recevrai ton message.)_\n\n` +
                     `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
                     getFeedbackSuffix(totalPlayed),
                 );
@@ -264,15 +270,67 @@ export class WhatsappService implements OnModuleInit {
                     msg.from,
                     QuestionType.VERITE,
                   );
+                await this.gameService.updateGameSession(
+                  msg.from,
+                  question.id,
+                  0,
+                );
                 await msg.reply(
                   `💬 *VÉRITÉ*\n\n${question.text}\n\n` +
-                    `_(Envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, *0* ou */retour* pour le menu)_\n\n` +
+                    `_(Réponds directement à cette vérité dans le chat. Je confirmerai la réception de ta réponse.)_\n\n` +
                     `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
                     getFeedbackSuffix(totalPlayed),
                 );
               }
+            } else {
+              const session = await this.gameService.getGameSession(msg.from);
+              const currentQuestion = session?.currentQuestionId
+                ? await this.gameService.getQuestionById(
+                    session.currentQuestionId,
+                  )
+                : null;
+
+              if (currentQuestion?.type === QuestionType.ACTION) {
+                const normalizedText = this.normalizeText(text);
+                const confirmationWords = [
+                  'ok',
+                  'fait',
+                  'fini',
+                  'termine',
+                  'terminé',
+                  'oui',
+                  'done',
+                ];
+                const isConfirmation = confirmationWords.some((word) =>
+                  normalizedText.includes(this.normalizeText(word)),
+                );
+
+                if (isConfirmation) {
+                  await this.gameService.updateGameSession(msg.from, null, 0);
+                  await msg.reply(
+                    "👍 Ok, réceptionné ! Je ne peux pas vérifier si l'action a été faite, mais ton message est bien reçu.\n\n" +
+                      'Pour continuer : envoie *1* ou */action* pour une action, *2* ou */verite* pour une vérité, ou *0* pour le menu.',
+                  );
+                } else {
+                  await msg.reply(
+                    "🔔 Envoie *ok* quand l'action est faite. Si tu veux une autre action, envoie *1* ou */action*. Si tu veux une vérité, envoie *2* ou */verite*.",
+                  );
+                }
+              } else if (currentQuestion?.type === QuestionType.VERITE) {
+                await this.gameService.updateGameSession(msg.from, null, 0);
+                await msg.reply(
+                  '✅ Réponse reçue ! Je ne peux pas vérifier si elle est vraie, mais ton message a bien été pris en compte.\n\n' +
+                    'Pour continuer : envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, ou *0* pour le menu.',
+                );
+              } else {
+                await msg.reply(
+                  '📌 Je ne comprends pas ce message. Pour continuer :\n' +
+                    '• *1* ou */action* pour une action\n' +
+                    '• *2* ou */verite* pour une vérité\n' +
+                    '• *0* ou */retour* pour le menu',
+                );
+              }
             }
-            // Tout autre message → silence
             break;
 
           // 5️⃣ Mode Devinette → nouvelle devinette ou retour menu
