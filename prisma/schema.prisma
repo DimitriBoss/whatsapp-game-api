@@ -31,13 +31,15 @@ enum QuestionType {
 // --- MODELES ---
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  phoneNumber  String    @unique // Ex: "+229XXXXXXXX"
-  firstName    String?   // Prénom
-  lastName     String?   // Nom
-  botState     BotState  @default(START) // État actuel dans le jeu
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id                 String    @id @default(uuid()) @db.Uuid
+  phoneNumber        String    @unique // Ex: "+229XXXXXXXX"
+  firstName          String?   // Prénom
+  lastName           String?   // Nom
+  botState           BotState  @default(START) // État actuel dans le jeu
+  playedActionVerite Int       @default(0)
+  playedDevinette    Int       @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@map("users")
 }

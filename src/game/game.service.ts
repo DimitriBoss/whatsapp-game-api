@@ -116,4 +116,17 @@ export class GameService {
       data: { firstName },
     });
   }
+
+  // Incrémente le compteur de questions jouées et retourne le total cumulé
+  async incrementUserQuestionCount(phoneNumber: string, type: QuestionType): Promise<number> {
+    const isDevinette = type === QuestionType.DEVINETTE;
+    const user = await this.prisma.user.update({
+      where: { phoneNumber },
+      data: {
+        playedDevinette: isDevinette ? { increment: 1 } : undefined,
+        playedActionVerite: !isDevinette ? { increment: 1 } : undefined,
+      },
+    });
+    return user.playedDevinette + user.playedActionVerite;
+  }
 }

@@ -60,12 +60,19 @@ export class WhatsappService implements OnModuleInit {
       console.error('❌ Le client WhatsApp a été déconnecté :', reason);
     });
 
-    // 3. Écouter les messages entrants
     this.client.on('message', async (msg) => {
       try {
         // Récupère ou crée l'utilisateur à chaque message
       const user = await this.gameService.getOrCreateUser(msg.from);
       const text = msg.body.trim().toLowerCase(); // majuscule ou minuscule = pareil
+
+      const formLink = 'https://docs.google.com/forms/d/e/1FAIpQLScBKWZbglMZuXABR4r0QE3nbe4E5CFvVk-F_F-DwZaktS0nZg/viewform?usp=dialog';
+      const getFeedbackSuffix = (total: number) => {
+        if (total === 20 || total === 50 || total === 100) {
+          return `\n\n📝 *Votre avis nous intéresse !* Vous avez joué à ${total} questions. Merci de prendre 1 minute pour remplir ce formulaire de feedback : ${formLink}`;
+        }
+        return '';
+      };
 
       // 🛑 Commande d'arrêt — disponible depuis n'importe quel état
       if (text === '/stop' || text === '/close') {
@@ -165,10 +172,12 @@ export class WhatsappService implements OnModuleInit {
                 devinette.id,
                 0,
               );
+              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.DEVINETTE);
               await msg.reply(
                 `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
                   `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                  getFeedbackSuffix(totalPlayed),
               );
             }
           } else {
@@ -198,10 +207,12 @@ export class WhatsappService implements OnModuleInit {
             if (!question) {
               await msg.reply("😅 Plus d'actions disponibles !");
             } else {
+              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.ACTION);
               await msg.reply(
                 `🎭 *ACTION*\n\n${question.text}\n\n` +
                   `_(Envoie *1* ou */action* pour une autre action, *2* ou */verite* pour une vérité, *0* ou */retour* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                  getFeedbackSuffix(totalPlayed),
               );
             }
           } else if (text === '2' || text === '/verite' || text === '/vérité') {
@@ -212,10 +223,12 @@ export class WhatsappService implements OnModuleInit {
             if (!question) {
               await msg.reply('😅 Plus de vérités disponibles !');
             } else {
+              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.VERITE);
               await msg.reply(
                 `💬 *VÉRITÉ*\n\n${question.text}\n\n` +
                   `_(Envoie *1* ou */action* pour une action, *2* ou */verite* pour une autre vérité, *0* ou */retour* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                  getFeedbackSuffix(totalPlayed),
               );
             }
           }
@@ -247,10 +260,12 @@ export class WhatsappService implements OnModuleInit {
                 devinette.id,
                 0,
               );
+              const totalPlayed = await this.gameService.incrementUserQuestionCount(msg.from, QuestionType.DEVINETTE);
               await msg.reply(
                 `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
                   `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_\n\n` +
-                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`,
+                  `💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._` +
+                  getFeedbackSuffix(totalPlayed),
               );
             }
           } else {
