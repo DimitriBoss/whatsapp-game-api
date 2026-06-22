@@ -37,6 +37,8 @@ export class WhatsappService implements OnModuleInit {
     this.client.on('qr', (qr) => {
       console.log('📱 Scanne ce QR Code avec ton WhatsApp pour lier le bot :');
       qrcode.generate(qr, { small: true });
+      console.log('🔗 Ou clique sur ce lien si le QR Code ci-dessus est déformé :');
+      console.log(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`);
     });
 
     // 2. Confirmer la connexion
