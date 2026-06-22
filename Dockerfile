@@ -22,6 +22,16 @@ RUN apt-get update && apt-get install -y \
   libpangocairo-1.0-0 \
   libpango-1.0-0 \
   libcairo2 \
+  libxfixes3 \
+  libxrender1 \
+  libxcursor1 \
+  libxi6 \
+  libxtst6 \
+  libxss1 \
+  libx11-6 \
+  libx11-xcb1 \
+  libxcb1 \
+  libxext6 \
   --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
