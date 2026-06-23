@@ -1090,7 +1090,7 @@ async function main() {
       },
       {
         text: "Je suis l'acronyme de l'examen final qui marque la fin du collège au Bénin. Qui suis-je ?",
-        answer: 'bepc',
+        answer: 'bac|baccalaureat',
         type: 'DEVINETTE',
       },
       {

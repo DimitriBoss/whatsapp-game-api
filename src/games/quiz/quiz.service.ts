@@ -68,9 +68,9 @@ export class QuizService {
   /**
    * Traite la réponse à la question en cours
    */
-  async handleAnswer(chatId: string, input: string, currentData: any): Promise<string> {
+  async handleAnswer(sessionKey: string, senderNumber: string, input: string, currentData: any): Promise<string> {
     if (!currentData || !currentData.questionIds) {
-      return await this.startQuiz(chatId);
+      return await this.startQuiz(sessionKey);
     }
 
     const state = currentData as QuizState;
@@ -106,10 +106,13 @@ export class QuizService {
 
     // Vérifier si le quiz est fini
     if (state.currentIndex >= state.total) {
-      await this.gameService.updateGameSessionWithData(chatId, null, null);
+      await this.gameService.updateGameSessionWithData(sessionKey, null, null);
       
       // Incrémenter le compteur de jeu de l'utilisateur
-      await this.gameService.incrementPlayedCount(chatId);
+      await this.gameService.incrementPlayedCount(senderNumber);
+
+      const pointsWon = state.score * 5;
+      const newPoints = await this.gameService.incrementUserPoints(senderNumber, pointsWon);
 
       let finalComment = '';
       if (state.score === state.total) {
@@ -125,14 +128,15 @@ export class QuizService {
       return (
         `${feedback}\n\n` +
         `🏁 *QUIZ TERMINÉ !* 🏁\n\n` +
-        `Ton score final : *${state.score}/${state.total}*\n\n` +
+        `Ton score final : *${state.score}/${state.total}*\n` +
+        `🏆 Tu gagnes *+${pointsWon} points* ! (Total : *${newPoints}* pts)\n\n` +
         `${finalComment}\n\n` +
         `_(Envoie *5* pour relancer un Quiz, ou *0* pour retourner au menu principal)_`
       );
     }
 
     // Sauvegarder l'état
-    await this.gameService.updateGameSessionWithData(chatId, 'quiz', state);
+    await this.gameService.updateGameSessionWithData(sessionKey, 'quiz', state);
 
     // Poser la question suivante
     const nextQuestionId = state.questionIds[state.currentIndex];

@@ -75,9 +75,10 @@ export class GameService {
   // 🆕 AJOUT : mise à jour de l'état du bot pour un utilisateur
   // Nécessaire pour le state machine : START → MAIN_MENU → PLAYING...
   async updateUserState(phoneNumber: string, state: BotState) {
-    return this.prisma.user.update({
+    return this.prisma.user.upsert({
       where: { phoneNumber },
-      data: { botState: state },
+      update: { botState: state },
+      create: { phoneNumber, botState: state },
     });
   }
 
@@ -98,17 +99,33 @@ export class GameService {
   }
 
   async updateGameSessionWithData(chatId: string, currentGame: string | null, gameData: any) {
+    let mergedData = gameData;
+    if (currentGame !== null && gameData && typeof gameData === 'object') {
+      const existing = await this.prisma.gameSession.findUnique({
+        where: { chatId },
+      });
+      if (existing?.gameData && typeof existing.gameData === 'object') {
+        const ext = existing.gameData as any;
+        mergedData = {
+          ...gameData,
+          mode: ext.mode || gameData.mode,
+          player1: ext.player1 || gameData.player1,
+          player2: ext.player2 || gameData.player2,
+        };
+      }
+    }
+
     return this.prisma.gameSession.upsert({
       where: { chatId },
       update: {
         currentGame,
-        gameData: gameData || null,
+        gameData: mergedData || null,
         lastActivityAt: new Date(),
       },
       create: {
         chatId,
         currentGame,
-        gameData: gameData || null,
+        gameData: mergedData || null,
         lastActivityAt: new Date(),
         history: [],
       },
@@ -158,5 +175,16 @@ export class GameService {
       },
     });
     return user.playedCount;
+  }
+
+  // Incrémente les points (score) de l'utilisateur
+  async incrementUserPoints(phoneNumber: string, amount: number): Promise<number> {
+    const user = await this.prisma.user.update({
+      where: { phoneNumber },
+      data: {
+        points: { increment: amount },
+      },
+    });
+    return user.points;
   }
 }

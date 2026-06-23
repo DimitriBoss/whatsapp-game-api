@@ -70,6 +70,7 @@ model User {
   playedActionVerite Int       @default(0)
   playedDevinette    Int       @default(0)
   playedCount        Int       @default(0)     // Compteur total unifié
+  points             Int       @default(0)     // Score / Points accumulés
   role               UserRole  @default(USER)
   isBlocked          Boolean   @default(false)
   createdAt          DateTime  @default(now())

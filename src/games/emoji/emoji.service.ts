@@ -76,9 +76,9 @@ export class EmojiService {
   /**
    * Traite une proposition de l'utilisateur
    */
-  async handleGuess(chatId: string, input: string, currentData: any): Promise<string> {
+  async handleGuess(sessionKey: string, senderNumber: string, input: string, currentData: any): Promise<string> {
     if (!currentData || currentData.challengeIndex === undefined) {
-      return await this.startGame(chatId);
+      return await this.startGame(sessionKey);
     }
 
     const state = currentData as EmojiState;
@@ -91,19 +91,21 @@ export class EmojiService {
 
     if (isCorrect) {
       // Victoire !
-      await this.gameService.updateGameSessionWithData(chatId, null, null);
-      await this.gameService.incrementPlayedCount(chatId);
+      await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      await this.gameService.incrementPlayedCount(senderNumber);
+      const newPoints = await this.gameService.incrementUserPoints(senderNumber, 10);
 
       return (
         `🎉 *FÉLICITATIONS !* C'est la bonne réponse ! 🥳\n` +
-        `Il s'agissait bien de : *${challenge.displayAnswer}*.\n\n` +
+        `Il s'agissait bien de : *${challenge.displayAnswer}*.\n` +
+        `🏆 Tu gagnes *+10 points* ! (Total : *${newPoints}* pts)\n\n` +
         `_(Envoie *6* pour rejouer à Match Emoji, ou *0* pour le menu principal)_`
       );
     } else {
       state.attempts++;
       if (state.attempts >= 3) {
         // Défaite
-        await this.gameService.updateGameSessionWithData(chatId, null, null);
+        await this.gameService.updateGameSessionWithData(sessionKey, null, null);
         return (
           `❌ *Dommage !* C'était ta dernière tentative.\n` +
           `La bonne réponse était : *${challenge.displayAnswer}*.\n\n` +
@@ -112,7 +114,7 @@ export class EmojiService {
       }
 
       // Sauvegarder l'état et proposer un indice
-      await this.gameService.updateGameSessionWithData(chatId, 'emoji', state);
+      await this.gameService.updateGameSessionWithData(sessionKey, 'emoji', state);
       const remaining = 3 - state.attempts;
 
       return (

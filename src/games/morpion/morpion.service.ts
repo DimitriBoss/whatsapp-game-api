@@ -41,7 +41,7 @@ export class MorpionService {
   /**
    * Gère le coup en mode Solo
    */
-  async handleSoloMove(chatId: string, input: string, state: SoloMorpionState): Promise<string> {
+  async handleSoloMove(sessionKey: string, senderNumber: string, input: string, state: SoloMorpionState): Promise<string> {
     const position = parseInt(input.trim(), 10);
     if (isNaN(position) || position < 1 || position > 9) {
       return `⚠️ Envoie un chiffre entre *1* et *9* correspondant à une case libre.`;
@@ -64,14 +64,17 @@ export class MorpionService {
     // Vérifier si le joueur a gagné
     let check = this.checkWinner(boardStr);
     if (check.status === 'WIN') {
-      await this.gameService.updateGameSessionWithData(chatId, null, null);
+      await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      const reward = state.difficulty === 'HARD' ? 20 : 5;
+      const newPoints = await this.gameService.incrementUserPoints(senderNumber, reward);
       return (
         `🎉 *FÉLICITATIONS !* Tu as battu l'IA au Morpion ! 🥳\n\n` +
         `${this.renderBoard(boardStr)}\n\n` +
+        `🏆 Tu gagnes *+${reward} points* ! (Total : *${newPoints}* pts)\n\n` +
         `_(Envoie *1* pour rejouer en Difficile, *2* en Facile, ou *0* pour le menu)_`
       );
     } else if (check.status === 'DRAW') {
-      await this.gameService.updateGameSessionWithData(chatId, null, null);
+      await this.gameService.updateGameSessionWithData(sessionKey, null, null);
       return (
         `🤝 *ÉGALITÉ !* Belle partie.\n\n` +
         `${this.renderBoard(boardStr)}\n\n` +
@@ -89,14 +92,14 @@ export class MorpionService {
     // Vérifier si le bot a gagné
     check = this.checkWinner(boardStr);
     if (check.status === 'WIN' && check.winner === 'O') {
-      await this.gameService.updateGameSessionWithData(chatId, null, null);
+      await this.gameService.updateGameSessionWithData(sessionKey, null, null);
       return (
         `🤖 *DOMMAGE !* L'IA a gagné cette partie. 🦾\n\n` +
         `${this.renderBoard(boardStr)}\n\n` +
         `_(Envoie *1* pour rejouer en Difficile, *2* en Facile, ou *0* pour le menu)_`
       );
     } else if (check.status === 'DRAW') {
-      await this.gameService.updateGameSessionWithData(chatId, null, null);
+      await this.gameService.updateGameSessionWithData(sessionKey, null, null);
       return (
         `🤝 *ÉGALITÉ !* Belle partie.\n\n` +
         `${this.renderBoard(boardStr)}\n\n` +
@@ -106,7 +109,7 @@ export class MorpionService {
 
     // Continuer le jeu
     state.board = boardStr;
-    await this.gameService.updateGameSessionWithData(chatId, 'morpion', state);
+    await this.gameService.updateGameSessionWithData(sessionKey, 'morpion', state);
 
     return (
       `🤖 L'IA a joué en case *${botIndex + 1}*.\n` +
@@ -216,12 +219,14 @@ export class MorpionService {
     input: string,
     gameId: string,
     role: 'player1' | 'player2',
+    isGroup: boolean = false,
   ): Promise<{
     success: boolean;
     message: string;
     shouldNotifyAdversary: boolean;
     adversaryChatId?: string;
     adversaryMessage?: string;
+    mentions?: string[];
   }> {
     const game = await this.prisma.morpionGame.findUnique({
       where: { id: gameId },
@@ -235,9 +240,19 @@ export class MorpionService {
       };
     }
 
+    // Sécurité: vérifier que l'appelant est bien un des deux joueurs
+    if (chatId !== game.player1ChatId && chatId !== game.player2ChatId) {
+      return {
+        success: false,
+        message: `⚠️ Tu ne fais pas partie de ce match de Morpion !`,
+        shouldNotifyAdversary: false,
+      };
+    }
+
     // Vérifier si c'est le tour de ce joueur
+    const isPlayer1 = chatId === game.player1ChatId;
     const isPlayer1Turn = game.currentTurn === 1;
-    const isThisPlayerTurn = (role === 'player1' && isPlayer1Turn) || (role === 'player2' && !isPlayer1Turn);
+    const isThisPlayerTurn = (isPlayer1 && isPlayer1Turn) || (!isPlayer1 && !isPlayer1Turn);
 
     if (!isThisPlayerTurn) {
       return {
@@ -268,12 +283,12 @@ export class MorpionService {
     }
 
     // Appliquer le coup
-    const symbol = role === 'player1' ? 'X' : 'O';
+    const symbol = isPlayer1 ? 'X' : 'O';
     boardArray[index] = symbol;
     const newBoard = boardArray.join('');
 
     const check = this.checkWinner(newBoard);
-    const adversaryChatId = role === 'player1' ? game.player2ChatId! : game.player1ChatId;
+    const adversaryChatId = isPlayer1 ? game.player2ChatId! : game.player1ChatId;
 
     if (check.status === 'WIN') {
       // Fin de la partie - Victoire
@@ -288,13 +303,38 @@ export class MorpionService {
 
       // Libérer les sessions
       await this.gameService.updateGameSessionWithData(game.player1ChatId, null, null);
-      await this.gameService.updateGameSessionWithData(game.player2ChatId!, null, null);
+      if (game.player2ChatId) {
+        await this.gameService.updateGameSessionWithData(game.player2ChatId, null, null);
+      }
+
+      const newPoints = await this.gameService.incrementUserPoints(chatId, 15);
+
+      if (isGroup) {
+        const winnerMention = `@${chatId.split('@')[0]}`;
+        const p1Mention = `@${game.player1ChatId.split('@')[0]}`;
+        const p2Mention = game.player2ChatId ? `@${game.player2ChatId.split('@')[0]}` : 'Adversaire';
+        const mentions = [game.player1ChatId];
+        if (game.player2ChatId) mentions.push(game.player2ChatId);
+
+        return {
+          success: true,
+          message:
+            `🏆 *MORPION TERMINÉ* 🏆\n\n` +
+            `🎉 *VICTOIRE !* ${winnerMention} a gagné la partie contre ${isPlayer1 ? p2Mention : p1Mention} ! 🥳\n\n` +
+            `${this.renderBoard(newBoard)}\n\n` +
+            `🏆 Tu gagnes *+15 points* ! (Total : *${newPoints}* pts)\n\n` +
+            `_(Envoie *4* pour rejouer, ou *0* pour le menu principal)_`,
+          shouldNotifyAdversary: false,
+          mentions,
+        };
+      }
 
       return {
         success: true,
         message:
           `🏆 *VICTOIRE !* Tu as gagné la partie ! 🥳\n\n` +
           `${this.renderBoard(newBoard)}\n\n` +
+          `🏆 Tu gagnes *+15 points* ! (Total : *${newPoints}* pts)\n\n` +
           `_(Envoie *4* pour démarrer une nouvelle partie, ou *0* pour le menu principal)_`,
         shouldNotifyAdversary: true,
         adversaryChatId,
@@ -316,12 +356,25 @@ export class MorpionService {
 
       // Libérer les sessions
       await this.gameService.updateGameSessionWithData(game.player1ChatId, null, null);
-      await this.gameService.updateGameSessionWithData(game.player2ChatId!, null, null);
+      if (game.player2ChatId) {
+        await this.gameService.updateGameSessionWithData(game.player2ChatId, null, null);
+      }
 
       const drawMsg =
         `🤝 *ÉGALITÉ !* Aucun vainqueur sur cette grille.\n\n` +
         `${this.renderBoard(newBoard)}\n\n` +
         `_(Envoie *4* pour lancer une nouvelle partie, ou *0* pour le menu principal)_`;
+
+      if (isGroup) {
+        const mentions = [game.player1ChatId];
+        if (game.player2ChatId) mentions.push(game.player2ChatId);
+        return {
+          success: true,
+          message: drawMsg,
+          shouldNotifyAdversary: false,
+          mentions,
+        };
+      }
 
       return {
         success: true,
@@ -343,6 +396,26 @@ export class MorpionService {
     });
 
     const renderedBoard = this.renderBoard(newBoard);
+
+    if (isGroup) {
+      const p1Mention = `@${game.player1ChatId.split('@')[0]}`;
+      const p2Mention = game.player2ChatId ? `@${game.player2ChatId.split('@')[0]}` : 'Adversaire';
+      const currentPlayerMention = isPlayer1 ? p1Mention : p2Mention;
+      const nextPlayerMention = isPlayer1 ? p2Mention : p1Mention;
+      const nextSymbol = isPlayer1 ? '⭕' : '❌';
+      const mentions = [game.player1ChatId];
+      if (game.player2ChatId) mentions.push(game.player2ChatId);
+
+      return {
+        success: true,
+        message:
+          `✅ Coup de ${currentPlayerMention} enregistré en case *${position}*.\n` +
+          `👉 C'est au tour de ${nextPlayerMention} (${nextSymbol}) ! Envoie le numéro d'une case libre.\n\n` +
+          `${renderedBoard}`,
+        shouldNotifyAdversary: false,
+        mentions,
+      };
+    }
 
     return {
       success: true,
@@ -482,12 +555,13 @@ export class MorpionService {
       return numEmojis[idx];
     };
 
+    // Rendu sous forme de grille emoji propre et aérée pour un alignement parfait sans bloc monospace
     return (
-      ` ${cell(0)} | ${cell(1)} | ${cell(2)} \n` +
-      `----------- \n` +
-      ` ${cell(3)} | ${cell(4)} | ${cell(5)} \n` +
-      `----------- \n` +
-      ` ${cell(6)} | ${cell(7)} | ${cell(8)} `
+      `${cell(0)}  │  ${cell(1)}  │  ${cell(2)}\n` +
+      `───┼───┼───\n` +
+      `${cell(3)}  │  ${cell(4)}  │  ${cell(5)}\n` +
+      `───┼───┼───\n` +
+      `${cell(6)}  │  ${cell(7)}  │  ${cell(8)}`
     );
   }
 }

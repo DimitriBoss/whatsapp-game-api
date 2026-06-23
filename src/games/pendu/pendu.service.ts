@@ -137,7 +137,7 @@ export class PenduService {
       `Le mot fait partie de la culture, de la géographie ou des traditions béninoises/africaines.\n\n` +
       `Mot à deviner :\n` +
       `*${this.renderWord(state.word, state.guessedLetters)}*\n\n` +
-      `Propose une lettre (ex: *a*) ou devine le mot complet !\n` +
+      `Propose une lettre (ex: *r: a ou r a*) ou devine le mot complet !\n` +
       `_(Pour quitter, envoie *0* ou */retour*)_`
     );
   }
@@ -145,9 +145,14 @@ export class PenduService {
   /**
    * Traite une proposition (lettre ou mot)
    */
-  async handleGuess(chatId: string, input: string, currentData: any): Promise<string> {
+  async handleGuess(
+    sessionKey: string,
+    senderNumber: string,
+    input: string,
+    currentData: any,
+  ): Promise<string> {
     if (!currentData || !currentData.word) {
-      return await this.startGame(chatId);
+      return await this.startGame(sessionKey);
     }
 
     const state = currentData as PenduState;
@@ -159,29 +164,58 @@ export class PenduService {
 
     // Cas 1 : Tentative de mot complet
     if (cleanInput.length > 1) {
+      // Ignorer si la longueur ne correspond pas, sans infliger de pénalité
+      if (cleanInput.length !== state.word.length) {
+        return (
+          `⚠️ Mauvaise longueur ! Le mot à deviner fait *${state.word.length}* lettres.\n` +
+          `Ton entrée (*${input}*) a été ignorée pour ne pas te pénaliser.\n\n` +
+          `Mot :\n` +
+          `*${this.renderWord(state.word, state.guessedLetters)}*\n\n` +
+          `Lettres essayées : ${state.guessedLetters.join(', ') || 'aucune'}\n` +
+          `Erreurs : *${state.errors}/7*`
+        );
+      }
+
       if (cleanInput === state.word) {
         // Victoire !
-        await this.gameService.updateGameSessionWithData(chatId, null, null);
+        await this.gameService.updateGameSessionWithData(
+          sessionKey,
+          null,
+          null,
+        );
+        const newPoints = await this.gameService.incrementUserPoints(
+          senderNumber,
+          15,
+        );
         return (
           `🎉 *FÉLICITATIONS !* Tu as trouvé le mot caché ! 🥳\n` +
-          `Le mot était bien : *${state.originalWord}*.\n\n` +
-          `_(Envoie *1* pour rejouer au Pendu, ou *0* pour retourner au menu principal)_`
+          `Le mot était bien : *${state.originalWord}*.\n` +
+          `🏆 Tu gagnes *+15 points* ! (Total : *${newPoints}* pts)\n\n` +
+          `_(Envoie *3* pour rejouer au Pendu, ou *0* pour retourner au menu principal)_`
         );
       } else {
         // Mauvaise tentative de mot complet -> pénalité de 2 erreurs
         state.errors += 2;
         if (state.errors >= 7) {
           state.errors = 7;
-          await this.gameService.updateGameSessionWithData(chatId, null, null);
+          await this.gameService.updateGameSessionWithData(
+            sessionKey,
+            null,
+            null,
+          );
           return (
             `💀 *PENDU !* Le mot secret était : *${state.originalWord}*.\n\n` +
             `${this.renderHangman(7)}\n\n` +
             `Tu as épuisé tes tentatives.\n` +
-            `_(Envoie *1* pour rejouer au Pendu, ou *0* pour le menu)_`
+            `_(Envoie *3* pour rejouer au Pendu, ou *0* pour le menu)_`
           );
         }
 
-        await this.gameService.updateGameSessionWithData(chatId, 'pendu', state);
+        await this.gameService.updateGameSessionWithData(
+          sessionKey,
+          'pendu',
+          state,
+        );
         return (
           `❌ Ce n'est pas le mot *${input}* ! (+2 erreurs)\n\n` +
           `${this.renderHangman(state.errors)}\n\n` +
@@ -210,20 +244,34 @@ export class PenduService {
     if (isCorrect) {
       // Vérifier si gagné
       const isWon = state.word.split('').every((char) => {
-        // ignorer les caractères spéciaux s'il y en a, mais ici c'est normalisé
-        return state.guessedLetters.includes(char) || char === '-' || char === ' ';
+        return (
+          state.guessedLetters.includes(char) || char === '-' || char === ' '
+        );
       });
 
       if (isWon) {
-        await this.gameService.updateGameSessionWithData(chatId, null, null);
+        await this.gameService.updateGameSessionWithData(
+          sessionKey,
+          null,
+          null,
+        );
+        const newPoints = await this.gameService.incrementUserPoints(
+          senderNumber,
+          15,
+        );
         return (
           `🎉 *VICTOIRE !* Tu as trouvé le mot caché ! 🥳\n` +
-          `Le mot était : *${state.originalWord}*.\n\n` +
-          `_(Envoie *1* pour rejouer au Pendu, ou *0* pour le menu principal)_`
+          `Le mot était : *${state.originalWord}*.\n` +
+          `🏆 Tu gagnes *+15 points* ! (Total : *${newPoints}* pts)\n\n` +
+          `_(Envoie *3* pour rejouer au Pendu, ou *0* pour le menu principal)_`
         );
       }
 
-      await this.gameService.updateGameSessionWithData(chatId, 'pendu', state);
+      await this.gameService.updateGameSessionWithData(
+        sessionKey,
+        'pendu',
+        state,
+      );
       return (
         `✅ Bonne lettre ! La lettre *${letter.toUpperCase()}* est dans le mot.\n\n` +
         `Mot :\n` +
@@ -234,16 +282,24 @@ export class PenduService {
     } else {
       state.errors += 1;
       if (state.errors >= 7) {
-        await this.gameService.updateGameSessionWithData(chatId, null, null);
+        await this.gameService.updateGameSessionWithData(
+          sessionKey,
+          null,
+          null,
+        );
         return (
           `💀 *PENDU !* Tu as perdu.\n` +
           `Le mot secret était : *${state.originalWord}*.\n\n` +
           `${this.renderHangman(7)}\n\n` +
-          `_(Envoie *1* pour rejouer au Pendu, ou *0* pour le menu principal)_`
+          `_(Envoie *3* pour rejouer au Pendu, ou *0* pour le menu principal)_`
         );
       }
 
-      await this.gameService.updateGameSessionWithData(chatId, 'pendu', state);
+      await this.gameService.updateGameSessionWithData(
+        sessionKey,
+        'pendu',
+        state,
+      );
       return (
         `❌ Mauvaise pioche ! La lettre *${letter.toUpperCase()}* n'est pas dans le mot.\n\n` +
         `${this.renderHangman(state.errors)}\n\n` +

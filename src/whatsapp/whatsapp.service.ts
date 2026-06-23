@@ -1,8 +1,8 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { Client, LocalAuth } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode-terminal';
 import { GameService } from '../game/game.service';
-import { BotState, QuestionType, Severity, UserRole } from '@prisma/client';
+import { BotState, QuestionType, Severity } from '@prisma/client';
 import { PenduService } from '../games/pendu/pendu.service';
 import { MorpionService } from '../games/morpion/morpion.service';
 import { QuizService } from '../games/quiz/quiz.service';
@@ -13,7 +13,7 @@ import { AdminService } from '../admin/admin.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
-export class WhatsappService implements OnModuleInit {
+export class WhatsappService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsappService.name);
   private client: Client;
   private currentQr: string | null = null;
@@ -35,6 +35,18 @@ export class WhatsappService implements OnModuleInit {
     this.initializeClient();
   }
 
+  async onModuleDestroy() {
+    this.logger.log('⏳ Arrêt du client WhatsApp (fermeture de Puppeteer)...');
+    try {
+      if (this.client) {
+        await this.client.destroy();
+        this.logger.log('✅ Client WhatsApp détruit proprement.');
+      }
+    } catch (error) {
+      this.logger.error('⚠️ Erreur lors de la fermeture du client WhatsApp :', error);
+    }
+  }
+
   getCurrentQr(): string | null {
     return this.currentQr;
   }
@@ -49,7 +61,7 @@ export class WhatsappService implements OnModuleInit {
       webVersionCache: {
         type: 'remote',
         remotePath:
-          'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041881976-alpha.html',
+          'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041951580-alpha.html',
       },
       puppeteer: {
         headless: true,
@@ -98,13 +110,19 @@ export class WhatsappService implements OnModuleInit {
 
     this.client.on('message', async (msg) => {
       try {
+        if (msg.from === 'status@broadcast') return; // Ignorer les mises à jour de statut WhatsApp
+
         const isGroup = msg.from.endsWith('@g.us');
         const senderNumber = isGroup ? msg.author : msg.from;
 
         if (!senderNumber) return; // Ignorer les messages systèmes de groupe
 
+        let text = msg.body.trim().toLowerCase();
+
+        this.logger.log(`📩 Message reçu de [${senderNumber}] dans [${isGroup ? 'groupe' : 'solo'}] : "${msg.body}"`);
+
         // Clé de session composite en cas de groupe
-        const sessionKey = isGroup ? `${msg.from}:${senderNumber}` : msg.from;
+        let sessionKey = isGroup ? `${msg.from}:${senderNumber}` : msg.from;
 
         // 1. Rate Limiting Check
         if (this.rateLimitGuard.isRateLimited(sessionKey)) {
@@ -115,12 +133,166 @@ export class WhatsappService implements OnModuleInit {
         // 2. Récupérer ou créer l'utilisateur
         const user = await this.gameService.getOrCreateUser(senderNumber);
 
-        // 3. Vérifier si l'utilisateur est bloqué
+        // 3. Récupérer la session de jeu
+        let session = await this.gameService.getGameSession(sessionKey);
+
+        let botState = user.botState;
+
+        const groupSession = isGroup ? await this.gameService.getGameSession(msg.from) : null;
+        const groupGames = ['devinette', 'pendu', 'quiz', 'emoji', 'group_setup'];
+
+        if (isGroup && groupSession && groupSession.currentGame && groupGames.includes(groupSession.currentGame)) {
+          const groupGameData = groupSession.gameData as any;
+          if (groupGameData?.mode === 'challenge') {
+            const isParticipant = senderNumber === groupGameData.player1 || senderNumber === groupGameData.player2;
+            if (!isParticipant) {
+              const isGlobalCmd =
+                text === '/score' ||
+                text === '/points' ||
+                text === '/top' ||
+                text === '/leaderboard' ||
+                text === '/classement' ||
+                text === '/help' ||
+                text === '/aide' ||
+                text === '/ping';
+              if (!isGlobalCmd) {
+                return; // Ignorer complètement les spectateurs
+              }
+            }
+          }
+
+          // Rediriger la session sur le groupe
+          session = groupSession;
+          sessionKey = msg.from;
+          if (groupSession.currentGame === 'devinette') botState = BotState.PLAYING_DEVINETTE;
+          else if (groupSession.currentGame === 'pendu') botState = BotState.PLAYING_PENDU;
+          else if (groupSession.currentGame === 'quiz') botState = BotState.PLAYING_QUIZ;
+          else if (groupSession.currentGame === 'emoji') botState = BotState.PLAYING_EMOJI;
+          else if (groupSession.currentGame === 'group_setup') botState = BotState.MAIN_MENU;
+        }
+
+        // 4. Vérifier si l'utilisateur est bloqué
         if (user.isBlocked) {
           return; // On l'ignore silencieusement
         }
 
-        const text = msg.body.trim().toLowerCase();
+        // Si le bot est mentionné dans un groupe, on retire la mention pour lire la suite
+        const botWid = this.client.info?.wid?._serialized;
+        const mentionsBot =
+          msg.mentionedIds &&
+          botWid &&
+          msg.mentionedIds.includes(botWid);
+
+        if (mentionsBot) {
+          const mentionPrefix = `@${botWid.split('@')[0]}`;
+          if (text.startsWith(mentionPrefix.toLowerCase())) {
+            text = text.substring(mentionPrefix.length).trim();
+          }
+        }
+
+        const isCommand = text.startsWith('/') || msg.body.startsWith('#');
+
+        // 🛡️ Gestion de l'anti-bruit en groupe : le bot n'écoute que les commandes, les mentions, ou les entrées de jeu strictes
+        if (isGroup && !isCommand && !mentionsBot) {
+          let isStrictGameInput = false;
+
+          switch (botState) {
+            case BotState.MAIN_MENU:
+              if (session?.currentGame === 'group_setup') {
+                const setupData = session.gameData as any;
+                if (setupData?.mode === 'awaiting_challenge_mention') {
+                  isStrictGameInput = (msg.mentionedIds && msg.mentionedIds.length > 0) || text === '0';
+                } else {
+                  isStrictGameInput = /^[0-2]$/.test(text);
+                }
+              } else {
+                isStrictGameInput = /^[0-6]$/.test(text);
+              }
+              break;
+
+            case BotState.PLAYING_ACTION_VERITE:
+              // Action/Vérité : accepte tout pour les réponses aux questions
+              isStrictGameInput = true;
+              break;
+
+            case BotState.PLAYING_DEVINETTE:
+              // Devinette : en groupe, nécessite le préfixe r: ou reponse: (ou '0'/'suivant')
+              if (isGroup) {
+                const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+                isStrictGameInput = text === '0' || text === 'suivant' || prefixRegex.test(msg.body.trim());
+              } else {
+                isStrictGameInput = true;
+              }
+              break;
+
+            case BotState.PLAYING_PENDU:
+              // Pendu : seulement 0, ou une réponse préfixée
+              if (isGroup) {
+                const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+                isStrictGameInput = text === '0' || prefixRegex.test(msg.body.trim());
+              } else {
+                isStrictGameInput = true;
+              }
+              break;
+
+            case BotState.PLAYING_MORPION:
+              const morpionData = session?.gameData as any;
+              const isExitWord = ['retour', 'quitter', 'abandonner', 'menu'].includes(text);
+              if (morpionData?.mode === 'awaiting_challenge_mention') {
+                isStrictGameInput = (msg.mentionedIds && msg.mentionedIds.length > 0) || text === '0' || isExitWord;
+              } else if (!morpionData || !morpionData.mode) {
+                // Menu Morpion
+                if (isGroup) {
+                  isStrictGameInput =
+                    /^[01]$/.test(text) ||
+                    (text.startsWith('1') && msg.mentionedIds && msg.mentionedIds.length > 0) ||
+                    isExitWord;
+                } else {
+                  isStrictGameInput =
+                    /^[0-4]$/.test(text) ||
+                    (text.length === 6 && /^[a-z0-9]+$/i.test(text)) ||
+                    isExitWord;
+                }
+              } else {
+                // En cours de partie (solo ou multi)
+                isStrictGameInput = /^[0-9]$/.test(text) || isExitWord;
+              }
+              break;
+
+            case BotState.PLAYING_QUIZ:
+              // Quiz : seulement 0, ou une réponse préfixée
+              if (isGroup) {
+                const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+                isStrictGameInput = text === '0' || prefixRegex.test(msg.body.trim());
+              } else {
+                isStrictGameInput = true;
+              }
+              break;
+
+            case BotState.PLAYING_EMOJI:
+              // Emoji : en groupe, nécessite le préfixe r: ou reponse: (ou '0')
+              if (isGroup) {
+                const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+                isStrictGameInput = text === '0' || prefixRegex.test(msg.body.trim());
+              } else {
+                isStrictGameInput = true;
+              }
+              break;
+          }
+
+          if (!isStrictGameInput) {
+            return; // Ignorer le message
+          }
+        }
+
+        // Normaliser les commandes de menu et de jeu (ex: /1, /5...)
+        if (text.startsWith('/')) {
+          const possibleOption = text.substring(1);
+          if (/^\d+$/.test(possibleOption)) {
+            text = possibleOption;
+          }
+        }
+
         const TIP = `\n\n💡 _Astuce : À tout moment, envoie */stop* pour mettre le bot en pause, ou */start* pour le relancer._`;
 
         // 🛑 Commande d'arrêt globale
@@ -138,7 +310,7 @@ export class WhatsappService implements OnModuleInit {
           await this.gameService.updateGameSessionWithData(sessionKey, null, null);
           if (user.firstName) {
             await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-            await msg.reply(await this.getMainMenuMessage(user.firstName, TIP));
+            await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
           } else {
             await this.gameService.updateUserState(senderNumber, BotState.AWAITING_NAME);
             await msg.reply(
@@ -160,6 +332,60 @@ export class WhatsappService implements OnModuleInit {
           return;
         }
 
+        // 🏆 Commande globale de score/points
+        if (text === '/score' || text === '/points') {
+          const points = user.points || 0;
+          const played = user.playedCount || 0;
+          const rank =
+            (await this.prisma.user.count({
+              where: {
+                points: {
+                  gt: points,
+                },
+              },
+            })) + 1;
+
+          await msg.reply(
+            `🏆 *TES STATISTIQUES GAMEBOT* 🏆\n\n` +
+              `👤 Joueur : *${user.firstName || 'Ami'}*\n` +
+              `⭐ Score : *${points}* pts\n` +
+              `🎮 Parties jouées : *${played}*\n` +
+              `🏅 Rang global : *#${rank}*\n\n` +
+              `💡 Envoie */top* ou */classement* pour voir le tableau des meilleurs joueurs !`,
+          );
+          return;
+        }
+
+        // 🏅 Commande globale de classement/leaderboard
+        if (text === '/top' || text === '/leaderboard' || text === '/classement') {
+          const topUsers = await this.prisma.user.findMany({
+            where: {
+              firstName: { not: null },
+            },
+            orderBy: {
+              points: 'desc',
+            },
+            take: 10,
+            select: {
+              firstName: true,
+              points: true,
+            },
+          });
+
+          let leaderboardMsg = `🏅 *CLASSEMENT GÉNÉRAL (TOP 10)* 🏅\n\n`;
+          if (topUsers.length === 0) {
+            leaderboardMsg += `Aucun joueur classé pour le moment. Sois le premier !`;
+          } else {
+            topUsers.forEach((u, i) => {
+              const medals = ['🥇', '🥈', '🥉'];
+              const prefix = medals[i] || `${i + 1}.`;
+              leaderboardMsg += `${prefix} *${u.firstName}* - *${u.points}* pts\n`;
+            });
+          }
+          await msg.reply(leaderboardMsg + TIP);
+          return;
+        }
+
         // Commandes admin WhatsApp (commencent par #)
         if (msg.body.startsWith('#')) {
           await this.handleAdminCommand(msg, senderNumber);
@@ -167,37 +393,8 @@ export class WhatsappService implements OnModuleInit {
         }
 
         // Si le bot est arrêté (STOPPED), on ignore le reste
-        if (user.botState === BotState.STOPPED) {
+        if (botState === BotState.STOPPED) {
           return;
-        }
-
-        // Gestion de l'anti-bruit en groupe : ignorer les messages non interactifs si le bot n'est pas en cours de jeu
-        if (isGroup) {
-          const isCommand = msg.body.startsWith('/');
-          const isMenuOption =
-            user.botState === BotState.MAIN_MENU && ['1', '2', '3', '4', '5', '6', '0'].includes(text);
-          const isQuizOption = user.botState === BotState.PLAYING_QUIZ;
-          const isPenduOption = user.botState === BotState.PLAYING_PENDU;
-          const isMorpionOption = user.botState === BotState.PLAYING_MORPION;
-          const isEmojiOption = user.botState === BotState.PLAYING_EMOJI;
-          const isDevinetteOption = user.botState === BotState.PLAYING_DEVINETTE;
-          const isActionVeriteOption = user.botState === BotState.PLAYING_ACTION_VERITE;
-          const isNameAwaiting = user.botState === BotState.AWAITING_NAME;
-
-          const isAction =
-            isCommand ||
-            isMenuOption ||
-            isQuizOption ||
-            isPenduOption ||
-            isMorpionOption ||
-            isEmojiOption ||
-            isDevinetteOption ||
-            isActionVeriteOption ||
-            isNameAwaiting;
-
-          if (!isAction) {
-            return; // Ignorer les discussions ordinaires du groupe
-          }
         }
 
         // ⚔️ Morpion : Interception du défi direct dans le groupe
@@ -255,7 +452,6 @@ export class WhatsappService implements OnModuleInit {
         }
 
         // Machine à états principale du bot
-        const session = await this.gameService.getGameSession(sessionKey);
         const formLink =
           'https://docs.google.com/forms/d/e/1FAIpQLScBKWZbglMZuXABR4r0QE3nbe4E5CFvVk-F_F-DwZaktS0nZg/viewform?usp=dialog';
         const getFeedbackSuffix = (total: number) => {
@@ -265,7 +461,7 @@ export class WhatsappService implements OnModuleInit {
           return '';
         };
 
-        switch (user.botState) {
+        switch (botState) {
           case BotState.START:
             await this.gameService.updateUserState(senderNumber, BotState.AWAITING_NAME);
             await msg.reply(
@@ -277,10 +473,91 @@ export class WhatsappService implements OnModuleInit {
             const name = msg.body.trim();
             await this.gameService.setUserFirstName(senderNumber, name);
             await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-            await msg.reply(await this.getMainMenuMessage(name, TIP));
+            await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
             break;
 
           case BotState.MAIN_MENU:
+            if (session?.currentGame === 'group_setup') {
+              const setupData = session.gameData as any;
+              const targetGame = setupData.targetGame;
+
+              if (text === '0' || text === 'retour' || text === 'quitter') {
+                if (setupData?.mode === 'awaiting_challenge_mention') {
+                  // Revenir au sous-menu options de jeu en groupe
+                  await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame });
+                  await msg.reply(
+                    `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                      `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                      `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                      `0️⃣ - Retour\n\n` +
+                      `Réponds avec *1*, *2* ou *0*.` +
+                      TIP
+                  );
+                } else {
+                  // Retour au menu principal
+                  await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+                  await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
+                }
+                return;
+              }
+
+              if (setupData.mode === 'awaiting_challenge_mention') {
+                if (!msg.mentionedIds || msg.mentionedIds.length === 0) {
+                  await msg.reply(`⚠️ Tu dois mentionner un adversaire du groupe (ex: *@Jean*) ou taper *0* pour annuler.`);
+                  return;
+                }
+                const targetId = msg.mentionedIds[0];
+                if (targetId === senderNumber) {
+                  await msg.reply(`⚠️ Tu ne peux pas te défier toi-même !`);
+                  return;
+                }
+
+                // Initialiser la partie de défi au niveau du groupe
+                await this.gameService.updateGameSessionWithData(sessionKey, null, null); // effacer le setup du créateur
+                
+                await this.gameService.updateGameSessionWithData(msg.from, targetGame, {
+                  mode: 'challenge',
+                  player1: senderNumber,
+                  player2: targetId,
+                });
+
+                // Démarrer le jeu ciblé
+                await this.startGroupGame(targetGame, msg.from, senderNumber, targetId);
+                return;
+              }
+
+              if (text === '1') {
+                // Mode Groupe (Co-op)
+                await this.gameService.updateGameSessionWithData(sessionKey, null, null); // effacer le setup
+                
+                await this.gameService.updateGameSessionWithData(msg.from, targetGame, {
+                  mode: 'group',
+                });
+
+                await this.startGroupGame(targetGame, msg.from, senderNumber);
+                return;
+              } else if (text === '2') {
+                // Passer en attente de mention
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', {
+                  targetGame,
+                  mode: 'awaiting_challenge_mention',
+                });
+                await msg.reply(
+                  `⚔️ *DÉFI DUEL* ⚔️\n\n` +
+                    `Mentionne l'adversaire du groupe que tu souhaites défier (ex: *@Jean*) ou envoie *0* pour annuler.`
+                );
+                return;
+              } else {
+                await msg.reply(
+                  `⚠️ Choix invalide. Réponds avec :\n` +
+                    `• *1* pour le Mode Groupe\n` +
+                    `• *2* pour le Mode Défi\n` +
+                    `• *0* pour annuler`
+                );
+                return;
+              }
+            }
+
             if (text === '1') {
               await this.gameService.updateUserState(senderNumber, BotState.PLAYING_ACTION_VERITE);
               await msg.reply(
@@ -290,6 +567,18 @@ export class WhatsappService implements OnModuleInit {
                   `0️⃣ ou */retour* - Retourner au menu principal${TIP}`,
               );
             } else if (text === '2') {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'devinette' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+                return;
+              }
               await this.gameService.updateUserState(senderNumber, BotState.PLAYING_DEVINETTE);
               const question = await this.gameService.getRandomQuestion(sessionKey, QuestionType.DEVINETTE);
               if (!question) {
@@ -297,51 +586,105 @@ export class WhatsappService implements OnModuleInit {
               } else {
                 await this.gameService.updateGameSession(sessionKey, question.id, 0);
                 const totalPlayed = await this.gameService.incrementUserQuestionCount(senderNumber, QuestionType.DEVINETTE);
+                const instruction = `_(Réponds directement dans le chat, ou tape *suivant* pour passer, *0* pour le menu)_`;
                 await msg.reply(
                   `🧩 *DEVINETTE*\n\n${question.text}\n\n` +
-                    `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_` +
+                    instruction +
                     TIP +
                     getFeedbackSuffix(totalPlayed),
                 );
               }
             } else if (text === '3') {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'pendu' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+                return;
+              }
               await this.gameService.updateUserState(senderNumber, BotState.PLAYING_PENDU);
               const welcome = await this.penduService.startGame(sessionKey);
               await msg.reply(welcome + TIP);
             } else if (text === '4') {
               await this.gameService.updateUserState(senderNumber, BotState.PLAYING_MORPION);
-              await msg.reply(
-                `❌ *JEU DU MORPION* ⭕\n\n` +
-                  `Choisis ton mode de jeu :\n` +
-                  `1️⃣ - Mode Solo (Imbattable)\n` +
-                  `2️⃣ - Mode Solo (Facile)\n` +
-                  `3️⃣ - Créer une partie Multijoueur\n` +
-                  `4️⃣ - Rejoindre une partie Multijoueur\n` +
-                  `0️⃣ - Retour au menu principal\n\n` +
-                  `Réponds avec *1*, *2*, *3*, *4* ou *0*.` +
-                  (isGroup ? `\n\n👥 _(En groupe, tu peux aussi défier directement un ami en tapant /morpion @mention)_` : '') +
-                  TIP,
-              );
+              if (isGroup) {
+                await msg.reply(
+                  `❌ *MORPION EN GROUPE* ⭕\n\n` +
+                    `1️⃣ - Défier un ami du groupe (par @mention)\n` +
+                    `0️⃣ - Retour au menu principal\n\n` +
+                    `Réponds avec *1* ou *0*.` +
+                    TIP,
+                );
+              } else {
+                await msg.reply(
+                  `❌ *JEU DU MORPION* ⭕\n\n` +
+                    `Choisis ton mode de jeu :\n` +
+                    `1️⃣ - Mode Solo (Imbattable)\n` +
+                    `2️⃣ - Mode Solo (Facile)\n` +
+                    `3️⃣ - Créer une partie Multijoueur\n` +
+                    `4️⃣ - Rejoindre une partie Multijoueur\n` +
+                    `0️⃣ - Retour au menu principal\n\n` +
+                    `Réponds avec *1*, *2*, *3*, *4* ou *0*.` +
+                    TIP,
+                );
+              }
             } else if (text === '5') {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'quiz' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+                return;
+              }
               await this.gameService.updateUserState(senderNumber, BotState.PLAYING_QUIZ);
               const quizWelcome = await this.quizService.startQuiz(sessionKey);
               await msg.reply(quizWelcome);
             } else if (text === '6') {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'emoji' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+                return;
+              }
               await this.gameService.updateUserState(senderNumber, BotState.PLAYING_EMOJI);
               const emojiWelcome = await this.emojiService.startGame(sessionKey);
               await msg.reply(emojiWelcome + TIP);
             } else if (text === '0') {
               await msg.reply(this.getHelpMessage() + TIP);
             } else {
-              await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+              await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
             }
             break;
 
           case BotState.PLAYING_ACTION_VERITE:
-            if (text === '0' || text === '/retour' || text === '/menu') {
+            if (
+              text === '0' ||
+              text === '/retour' ||
+              text === '/menu' ||
+              text === 'retour' ||
+              text === 'quitter' ||
+              text === 'abandonner' ||
+              text === 'menu'
+            ) {
               await this.gameService.updateGameSessionWithData(sessionKey, null, null);
               await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-              await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+              await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
             } else if (text === '1' || text === '/action') {
               const question = await this.gameService.getRandomQuestion(sessionKey, QuestionType.ACTION);
               if (!question) {
@@ -409,10 +752,30 @@ export class WhatsappService implements OnModuleInit {
             break;
 
           case BotState.PLAYING_DEVINETTE:
-            if (text === '0' || text === '/retour' || text === '/menu') {
-              await this.gameService.updateGameSession(sessionKey, null, 0);
-              await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-              await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+            if (
+              text === '0' ||
+              text === '/retour' ||
+              text === '/menu' ||
+              text === 'retour' ||
+              text === 'quitter' ||
+              text === 'abandonner' ||
+              text === 'menu'
+            ) {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'devinette' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+              } else {
+                await this.gameService.updateGameSession(sessionKey, null, 0);
+                await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+                await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
+              }
             } else if (text === 'suivant') {
               const devinette = await this.gameService.getRandomQuestion(sessionKey, QuestionType.DEVINETTE);
               if (!devinette) {
@@ -420,9 +783,12 @@ export class WhatsappService implements OnModuleInit {
               } else {
                 await this.gameService.updateGameSession(sessionKey, devinette.id, 0);
                 const totalPlayed = await this.gameService.incrementUserQuestionCount(senderNumber, QuestionType.DEVINETTE);
+                const instruction = isGroup
+                  ? `_(Pour répondre dans le groupe, écris *r: ta réponse* ou *reponse: ta réponse*. Exemple : *r: Cotonou* ou *r Cotonou*.\nTape *suivant* pour passer, *0* pour le menu)_`
+                  : `_(Réponds directement dans le chat, ou tape *suivant* pour passer, *0* pour le menu)_`;
                 await msg.reply(
                   `🧩 *DEVINETTE*\n\n${devinette.text}\n\n` +
-                    `_(Réponds à la devinette, ou tape *suivant* pour passer, *0* pour le menu)_` +
+                    instruction +
                     TIP +
                     getFeedbackSuffix(totalPlayed),
                 );
@@ -436,17 +802,31 @@ export class WhatsappService implements OnModuleInit {
                   await this.gameService.updateGameSession(sessionKey, null, 0);
                   await msg.reply(`🧩 Erreur de configuration de la devinette. Envoie *suivant* pour passer.`);
                 } else {
-                  const normalizedUserAnswer = this.normalizeText(msg.body);
+                  const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+                  let cleanGuessText = text;
+                  if (prefixRegex.test(msg.body.trim())) {
+                    cleanGuessText = msg.body.trim().replace(prefixRegex, '').trim();
+                  } else if (isGroup) {
+                    return;
+                  }
+
+                  const normalizedUserAnswer = this.normalizeText(cleanGuessText);
                   const isCorrect = question.answer
                     .split('|')
                     .some((option) => normalizedUserAnswer.includes(this.normalizeText(option)));
 
+                  const formattedAnswers = question.answer
+                    .split('|')
+                    .map((ans) => `*${ans}*`)
+                    .join(' _ou_ ');
+
                   if (isCorrect) {
                     await this.gameService.updateGameSession(sessionKey, null, 0);
-                    const firstAnswer = question.answer.split('|')[0];
+                    const newPoints = await this.gameService.incrementUserPoints(senderNumber, 10);
                     await msg.reply(
                       `🎉 *Félicitations !* C'est la bonne réponse ! 🥳\n` +
-                        `La réponse était bien : *${firstAnswer}*\n\n` +
+                        `La réponse acceptée était : ${formattedAnswers}\n` +
+                        `🏆 Tu gagnes *+10 points* ! (Total : *${newPoints}* pts)\n\n` +
                         `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_` +
                         TIP,
                     );
@@ -455,17 +835,19 @@ export class WhatsappService implements OnModuleInit {
                     if (newAttempts < 3) {
                       await this.gameService.updateGameSession(sessionKey, question.id, newAttempts);
                       const remaining = 3 - newAttempts;
-                      await msg.reply(
+                      let errorMsg =
                         `❌ *Mauvaise réponse !*\n` +
-                          `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :` +
-                          TIP,
-                      );
+                        `Il te reste *${remaining}* tentative${remaining > 1 ? 's' : ''}. Réessaie :` +
+                        TIP;
+                      if (isGroup) {
+                        errorMsg += `\n_(N'oublie pas de préfixer ta réponse avec *r:*, ex : *r: Cotonou* ou *r Cotonou*)_`;
+                      }
+                      await msg.reply(errorMsg);
                     } else {
                       await this.gameService.updateGameSession(sessionKey, null, 0);
-                      const firstAnswer = question.answer.split('|')[0];
                       await msg.reply(
                         `❌ *Dommage !* C'était ta dernière tentative.\n` +
-                          `💡 La bonne réponse était : *${firstAnswer}*.\n\n` +
+                          `💡 La bonne réponse était : ${formattedAnswers}.\n\n` +
                           `_(Envoie *suivant* pour une autre devinette, ou *0* pour le menu)_` +
                           TIP,
                       );
@@ -477,62 +859,278 @@ export class WhatsappService implements OnModuleInit {
             break;
 
           case BotState.PLAYING_PENDU:
-            if (text === '0' || text === '/retour' || text === '/menu') {
-              await this.gameService.updateGameSessionWithData(sessionKey, null, null);
-              await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-              await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+            if (
+              text === '0' ||
+              text === '/retour' ||
+              text === '/menu' ||
+              text === 'retour' ||
+              text === 'quitter' ||
+              text === 'abandonner' ||
+              text === 'menu'
+            ) {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'pendu' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+              } else {
+                await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+                await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+                await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
+              }
             } else {
-              const response = await this.penduService.handleGuess(sessionKey, msg.body, session?.gameData);
-              await msg.reply(response);
+              const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+              let cleanGuessText = text;
+              if (prefixRegex.test(msg.body.trim())) {
+                cleanGuessText = msg.body.trim().replace(prefixRegex, '').trim();
+              } else if (isGroup) {
+                // En groupe, pour toute proposition (lettre ou mot), il faut préfixer.
+                return;
+              }
+              const response = await this.penduService.handleGuess(sessionKey, senderNumber, cleanGuessText, session?.gameData);
+              let finalResponse = response;
+              if (isGroup) {
+                const updatedSession = await this.gameService.getGameSession(sessionKey);
+                if (updatedSession?.currentGame === 'pendu') {
+                  finalResponse += `\n\n_(Propose une lettre ou le mot complet en préfixant par *r:*, ex : *r: a* ou *r a* ou *r: Cotonou* ou *r Cotonou*)_`;
+                }
+              }
+              await msg.reply(finalResponse);
             }
             break;
 
           case BotState.PLAYING_QUIZ:
-            if (text === '0' || text === '/retour' || text === '/menu') {
-              await this.gameService.updateGameSessionWithData(sessionKey, null, null);
-              await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-              await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+            if (
+              text === '0' ||
+              text === '/retour' ||
+              text === '/menu' ||
+              text === 'retour' ||
+              text === 'quitter' ||
+              text === 'abandonner' ||
+              text === 'menu'
+            ) {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'quiz' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+              } else {
+                await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+                await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+                await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
+              }
             } else {
-              const response = await this.quizService.handleAnswer(sessionKey, msg.body, session?.gameData);
-              await msg.reply(response);
+              const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+              let cleanGuessText = text;
+              if (prefixRegex.test(msg.body.trim())) {
+                cleanGuessText = msg.body.trim().replace(prefixRegex, '').trim();
+              } else if (isGroup) {
+                // En groupe, pour toute proposition, il faut préfixer.
+                return;
+              }
+              const response = await this.quizService.handleAnswer(sessionKey, senderNumber, cleanGuessText, session?.gameData);
+              let finalResponse = response;
+              if (isGroup) {
+                const updatedSession = await this.gameService.getGameSession(sessionKey);
+                if (updatedSession?.currentGame === 'quiz') {
+                  finalResponse += `\n\n_(Réponds en préfixant par *r:*, ex : *r: 1* ou *r 1* ou *r: Porto-Novo* ou *r Porto-Novo*)_`;
+                }
+              }
+              await msg.reply(finalResponse);
             }
             break;
 
           case BotState.PLAYING_EMOJI:
-            if (text === '0' || text === '/retour' || text === '/menu') {
-              await this.gameService.updateGameSessionWithData(sessionKey, null, null);
-              await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-              await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+            if (
+              text === '0' ||
+              text === '/retour' ||
+              text === '/menu' ||
+              text === 'retour' ||
+              text === 'quitter' ||
+              text === 'abandonner' ||
+              text === 'menu'
+            ) {
+              if (isGroup) {
+                await this.gameService.updateGameSessionWithData(sessionKey, 'group_setup', { targetGame: 'emoji' });
+                await msg.reply(
+                  `👥 *OPTIONS DE JEU EN GROUPE* 👥\n\n` +
+                    `1️⃣ - Mode Groupe (Tout le monde peut participer)\n` +
+                    `2️⃣ - Mode Défi (Défier un membre du groupe)\n` +
+                    `0️⃣ - Retour\n\n` +
+                    `Réponds avec *1*, *2* ou *0*.` +
+                    TIP
+                );
+              } else {
+                await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+                await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+                await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
+              }
             } else {
-              const response = await this.emojiService.handleGuess(sessionKey, msg.body, session?.gameData);
-              await msg.reply(response);
+              const prefixRegex = /^(reponse\s*:\s*|reponse\s+|r\s*:\s*|r\s+|\/r\s*|\/reponse\s*)/i;
+              let cleanGuessText = text;
+              if (prefixRegex.test(msg.body.trim())) {
+                cleanGuessText = msg.body.trim().replace(prefixRegex, '').trim().toLowerCase();
+              } else if (isGroup) {
+                return;
+              }
+              const response = await this.emojiService.handleGuess(sessionKey, senderNumber, cleanGuessText, session?.gameData);
+              let finalResponse = response;
+              if (isGroup) {
+                const updatedSession = await this.gameService.getGameSession(sessionKey);
+                if (updatedSession?.currentGame === 'emoji') {
+                  finalResponse += `\n\n_(Pour répondre dans le groupe, écris *r: ta réponse* ou *reponse: ta réponse*. Exemple : *r: Titanic* ou *r Titanic*)_`;
+                }
+              }
+              await msg.reply(finalResponse);
             }
             break;
 
           case BotState.PLAYING_MORPION:
             const gameData = session?.gameData as any;
-            if (text === '0' || text === '/retour' || text === '/menu') {
-              await this.gameService.updateGameSessionWithData(sessionKey, null, null);
-              await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-              await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+            const isExitCommand =
+              text === '0' ||
+              text === '/retour' ||
+              text === '/menu' ||
+              text === 'retour' ||
+              text === 'quitter' ||
+              text === 'abandonner' ||
+              text === 'menu';
+
+            if (isExitCommand) {
+              if (gameData && gameData.mode) {
+                // On est dans un sous-menu ou en cours de partie, on retourne au menu Morpion
+                await this.gameService.updateGameSessionWithData(sessionKey, 'morpion', null);
+                if (isGroup) {
+                  await msg.reply(
+                    `❌ *MORPION EN GROUPE* ⭕\n\n` +
+                      `1️⃣ - Défier un ami du groupe (par @mention)\n` +
+                      `0️⃣ - Retour au menu principal\n\n` +
+                      `Réponds avec *1* ou *0*.` +
+                      TIP,
+                  );
+                } else {
+                  await msg.reply(
+                    `❌ *JEU DU MORPION* ⭕\n\n` +
+                      `Choisis ton mode de jeu :\n` +
+                      `1️⃣ - Mode Solo (Imbattable)\n` +
+                      `2️⃣ - Mode Solo (Facile)\n` +
+                      `3️⃣ - Créer une partie Multijoueur\n` +
+                      `4️⃣ - Rejoindre une partie Multijoueur\n` +
+                      `0️⃣ - Retour au menu principal\n\n` +
+                      `Réponds avec *1*, *2*, *3*, *4* ou *0*.` +
+                      TIP,
+                  );
+                }
+              } else {
+                // On est déjà sur le menu Morpion, on retourne au menu principal
+                await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+                await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+                await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
+              }
             } else if (!gameData || !gameData.mode) {
               // Menu Morpion
-              if (text === '1') {
+              if (isGroup && text.startsWith('1')) {
+                if (!msg.mentionedIds || msg.mentionedIds.length === 0) {
+                  await this.gameService.updateGameSessionWithData(sessionKey, 'morpion', {
+                    mode: 'awaiting_challenge_mention',
+                  });
+                  await msg.reply(
+                    `⚔️ *NOUVEAU DÉFI MORPION* ⚔️\n\n` +
+                      `Mentionne l'adversaire que tu veux défier (ex: *@Jean*) ou envoie *0* pour annuler.`
+                  );
+                  return;
+                }
+                const targetId = msg.mentionedIds[0];
+                if (targetId === senderNumber) {
+                  await msg.reply(`⚠️ Tu ne peux pas te défier toi-même au Morpion !`);
+                  return;
+                }
+
+                const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+                const game = await this.prisma.morpionGame.create({
+                  data: {
+                    inviteCode: code,
+                    player1ChatId: senderNumber,
+                    player2ChatId: targetId,
+                    status: 'PLAYING',
+                    board: '         ',
+                  },
+                });
+
+                // Associer les sessions dans ce groupe pour les deux joueurs
+                const p1SessionKey = `${msg.from}:${senderNumber}`;
+                const p2SessionKey = `${msg.from}:${targetId}`;
+
+                await this.gameService.updateUserState(senderNumber, BotState.PLAYING_MORPION);
+                await this.gameService.updateGameSessionWithData(p1SessionKey, 'morpion', {
+                  mode: 'multi',
+                  gameId: game.id,
+                  role: 'player1',
+                  groupChatId: msg.from,
+                });
+
+                await this.gameService.updateUserState(targetId, BotState.PLAYING_MORPION);
+                await this.gameService.updateGameSessionWithData(p2SessionKey, 'morpion', {
+                  mode: 'multi',
+                  gameId: game.id,
+                  role: 'player2',
+                  groupChatId: msg.from,
+                });
+
+                const rendered = this.morpionService.renderBoard('         ');
+                await this.client.sendMessage(
+                  msg.from,
+                  `🎮 *MORPION MULTIJOUEUR EN GROUPE* 🎮\n\n` +
+                    `Partie commencée entre @${senderNumber.split('@')[0]} (❌) et @${targetId.split('@')[0]} (⭕) !\n` +
+                    `👉 C'est à @${senderNumber.split('@')[0]} de commencer.\n` +
+                    `Joue en envoyant le numéro d'une case libre (1 à 9).\n\n` +
+                    `${rendered}`,
+                  { mentions: [senderNumber, targetId] },
+                );
+                return;
+              } else if (text === '1' && !isGroup) {
                 const response = await this.morpionService.startSoloGame(sessionKey, 'HARD');
                 await msg.reply(response);
-              } else if (text === '2') {
+              } else if (text === '2' && !isGroup) {
                 const response = await this.morpionService.startSoloGame(sessionKey, 'EASY');
                 await msg.reply(response);
               } else if (text === '3') {
+                if (isGroup) {
+                  await msg.reply(
+                    `⚠️ Choix invalide. Réponds avec :\n` +
+                      `• *1* pour lancer un défi (ou *1 @mention*)\n` +
+                      `• *0* pour le menu`
+                  );
+                  return;
+                }
                 const result = await this.morpionService.createMultiplayerGame(senderNumber);
                 const game = await this.prisma.morpionGame.findUnique({ where: { inviteCode: result.code } });
                 await this.gameService.updateGameSessionWithData(sessionKey, 'morpion', {
                   mode: 'multi',
                   gameId: game?.id,
                   role: 'player1',
+                  groupChatId: isGroup ? msg.from : undefined,
                 });
                 await msg.reply(result.message);
               } else if (text === '4') {
+                if (isGroup) {
+                  await msg.reply(
+                    `⚠️ Choix invalide. Réponds avec :\n` +
+                      `• *1* pour lancer un défi (ou *1 @mention*)\n` +
+                      `• *0* pour le menu`
+                  );
+                  return;
+                }
                 await this.gameService.updateGameSessionWithData(sessionKey, 'morpion', {
                   mode: 'awaiting_code',
                 });
@@ -540,18 +1138,77 @@ export class WhatsappService implements OnModuleInit {
                   `🔑 *REJOINDRE PARTIE MORPION*\n\nSaisis le code d'invitation à 6 caractères pour rejoindre la partie :${TIP}`,
                 );
               } else if (text === '0') {
+                await this.gameService.updateGameSessionWithData(sessionKey, null, null);
                 await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
-                await msg.reply(await this.getMainMenuMessage(user.firstName || 'Ami', TIP));
+                await msg.reply(await this.getMainMenuMessage(senderNumber, TIP));
               } else {
                 await msg.reply(
-                  `⚠️ Mode invalide. Choisis :\n` +
-                    `1 - Solo (Difficile)\n` +
-                    `2 - Solo (Facile)\n` +
-                    `3 - Créer Multi\n` +
-                    `4 - Rejoindre Multi\n` +
-                    `0 - Retour au menu`,
+                  isGroup
+                    ? `⚠️ Choix invalide. Réponds avec :\n` +
+                      `• *1* pour lancer un défi (ou *1 @mention*)\n` +
+                      `• *0* pour le menu`
+                    : `⚠️ Mode invalide. Choisis :\n` +
+                      `1 - Solo (Difficile)\n` +
+                      `2 - Solo (Facile)\n` +
+                      `3 - Créer Multi\n` +
+                      `4 - Rejoindre Multi\n` +
+                      `0 - Retour au menu`,
                 );
               }
+            } else if (gameData.mode === 'awaiting_challenge_mention') {
+              if (!msg.mentionedIds || msg.mentionedIds.length === 0) {
+                await msg.reply(
+                  `⚠️ Tu dois mentionner un adversaire du groupe (ex: *@Jean*) ou taper *0* pour annuler.`
+                );
+                return;
+              }
+              const targetId = msg.mentionedIds[0];
+              if (targetId === senderNumber) {
+                await msg.reply(`⚠️ Tu ne peux pas te défier toi-même au Morpion !`);
+                return;
+              }
+
+              const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+              const game = await this.prisma.morpionGame.create({
+                data: {
+                  inviteCode: code,
+                  player1ChatId: senderNumber,
+                  player2ChatId: targetId,
+                  status: 'PLAYING',
+                  board: '         ',
+                },
+              });
+
+              const p1SessionKey = `${msg.from}:${senderNumber}`;
+              const p2SessionKey = `${msg.from}:${targetId}`;
+
+              await this.gameService.updateUserState(senderNumber, BotState.PLAYING_MORPION);
+              await this.gameService.updateGameSessionWithData(p1SessionKey, 'morpion', {
+                mode: 'multi',
+                gameId: game.id,
+                role: 'player1',
+                groupChatId: msg.from,
+              });
+
+              await this.gameService.updateUserState(targetId, BotState.PLAYING_MORPION);
+              await this.gameService.updateGameSessionWithData(p2SessionKey, 'morpion', {
+                mode: 'multi',
+                gameId: game.id,
+                role: 'player2',
+                groupChatId: msg.from,
+              });
+
+              const rendered = this.morpionService.renderBoard('         ');
+              await this.client.sendMessage(
+                msg.from,
+                `🎮 *MORPION MULTIJOUEUR EN GROUPE* 🎮\n\n` +
+                  `Partie commencée entre @${senderNumber.split('@')[0]} (❌) et @${targetId.split('@')[0]} (⭕) !\n` +
+                  `👉 C'est à @${senderNumber.split('@')[0]} de commencer.\n` +
+                  `Joue en envoyant le numéro d'une case libre (1 à 9).\n\n` +
+                  `${rendered}`,
+                { mentions: [senderNumber, targetId] },
+              );
+              return;
             } else if (gameData.mode === 'awaiting_code') {
               const result = await this.morpionService.joinMultiplayerGame(text.toUpperCase(), senderNumber);
               if (!result) {
@@ -563,7 +1220,7 @@ export class WhatsappService implements OnModuleInit {
                 await msg.reply(result.messagePlayer2);
               }
             } else if (gameData.mode === 'solo') {
-              const response = await this.morpionService.handleSoloMove(sessionKey, text, gameData);
+              const response = await this.morpionService.handleSoloMove(sessionKey, senderNumber, text, gameData);
               await msg.reply(response);
             } else if (gameData.mode === 'multi') {
               const result = await this.morpionService.handleMultiplayerMove(
@@ -571,15 +1228,18 @@ export class WhatsappService implements OnModuleInit {
                 text,
                 gameData.gameId,
                 gameData.role,
+                isGroup,
               );
               if (!result.success) {
                 await msg.reply(result.message);
               } else {
-                await msg.reply(result.message);
-                if (result.shouldNotifyAdversary && result.adversaryChatId && result.adversaryMessage) {
-                  if (gameData.groupChatId) {
-                    await this.client.sendMessage(gameData.groupChatId, result.adversaryMessage);
-                  } else {
+                if (isGroup) {
+                  await this.client.sendMessage(msg.from, result.message, {
+                    mentions: result.mentions,
+                  });
+                } else {
+                  await msg.reply(result.message);
+                  if (result.shouldNotifyAdversary && result.adversaryChatId && result.adversaryMessage) {
                     await this.client.sendMessage(result.adversaryChatId, result.adversaryMessage);
                   }
                 }
@@ -692,7 +1352,6 @@ export class WhatsappService implements OnModuleInit {
           try {
             await this.client.sendMessage(user.phoneNumber, `📢 *DIFFUSION ADMIN GameBot* 📢\n\n${arg}`);
             successCount++;
-            // Petit délai pour éviter de se faire ban par WhatsApp
             await new Promise((resolve) => setTimeout(resolve, 200));
           } catch (e) {
             this.logger.warn(`Échec de l'envoi broadcast à ${user.phoneNumber} : ${e.message}`);
@@ -702,7 +1361,6 @@ export class WhatsappService implements OnModuleInit {
         await msg.reply(`🏁 Diffusion terminée. Succès : *${successCount}/${users.length}*`);
         await this.adminService.logAdminAction(senderNumber, 'WHATSAPP_BROADCAST', 'ALL_USERS', { message: arg });
       } else if (command === 'addquestion') {
-        // Format : #addquestion type | texte | réponse
         const parts = arg.split('|');
         if (parts.length < 2) {
           await msg.reply(
@@ -738,9 +1396,11 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  private async getMainMenuMessage(firstName: string, tip: string): Promise<string> {
+  private async getMainMenuMessage(senderNumber: string, tip: string): Promise<string> {
+    const user = await this.gameService.getOrCreateUser(senderNumber);
     return (
-      `🎉 Bonjour *${firstName}* ! Choisis un jeu :\n\n` +
+      `🎉 Bonjour *${user.firstName || 'Ami'}* ! (Score : *${user.points}* pts) 🏆\n\n` +
+      `Choisis un jeu :\n\n` +
       `1️⃣ - Action / Vérité 🎭\n\n` +
       `2️⃣ - Devinettes 🧩\n\n` +
       `3️⃣ - Jeu du Pendu 🌳\n\n` +
@@ -748,6 +1408,7 @@ export class WhatsappService implements OnModuleInit {
       `5️⃣ - Quiz Culture Générale 🧠\n\n` +
       `6️⃣ - Match Emoji 🎬\n\n` +
       `0️⃣ - Aide ℹ️\n\n` +
+      `📊 Envoie */score* pour voir tes stats ou */top* pour le classement.\n\n` +
       `Réponds avec le numéro du jeu (de *1* à *6*).` +
       tip
     );
@@ -760,6 +1421,8 @@ export class WhatsappService implements OnModuleInit {
       `• */stop* ou */close* : Mettre le bot en pause (veille)\n` +
       `• */menu* ou */retour* : Retourner au menu principal\n` +
       `• */help* ou */aide* : Afficher ce message d'aide\n` +
+      `• */score* ou */points* : Voir ton score et tes stats\n` +
+      `• */top* ou */classement* : Voir le classement général\n` +
       `• */ping* : Tester si le bot est en ligne`
     );
   }
@@ -771,5 +1434,76 @@ export class WhatsappService implements OnModuleInit {
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]/g, '')
       .trim();
+  }
+
+  private async startGroupGame(targetGame: string, groupJid: string, player1: string, player2?: string) {
+    const session = await this.gameService.getGameSession(groupJid);
+    const gameData = session?.gameData as any;
+    const mode = gameData?.mode || 'group';
+
+    if (targetGame === 'devinette') {
+      const devinette = await this.gameService.getRandomQuestion(groupJid, QuestionType.DEVINETTE);
+      if (!devinette) {
+        await this.client.sendMessage(groupJid, `😅 Aucune devinette disponible pour l'instant !`);
+        await this.gameService.updateGameSessionWithData(groupJid, null, null);
+      } else {
+        await this.gameService.updateGameSession(groupJid, devinette.id, 0);
+        let header = '';
+        let instruction = '';
+        if (mode === 'challenge' && player2) {
+          header = `⚔️ *DÉFI DEVINETTE* ⚔️\n👥 @${player1.split('@')[0]} *VS* @${player2.split('@')[0]}\n\n`;
+          instruction = `_(Seuls les deux duellistes peuvent répondre. Réponds en préfixant par *r:* ou *reponse:*, ex : *r: Cotonou* ou *r Cotonou*)_`;
+        } else {
+          header = `🧩 *DEVINETTE EN GROUPE* 🧩\n\n`;
+          instruction = `_(Tout le monde peut participer ! Réponds en préfixant par *r:* ou *reponse:*, ex : *r: Cotonou* ou *r Cotonou*)_`;
+        }
+        await this.client.sendMessage(groupJid,
+          header +
+          `❓ *Question* :\n${devinette.text}\n\n` +
+          instruction + `\n\n` +
+          `_(Pour abandonner, envoie *0* ou */retour*)_`,
+          { mentions: mode === 'challenge' && player2 ? [player1, player2] : [] }
+        );
+      }
+    } else if (targetGame === 'pendu') {
+      const welcomeMsg = await this.penduService.startGame(groupJid);
+      let messageText = '';
+      if (mode === 'challenge' && player2) {
+        const header = `⚔️ *DÉFI PENDU* ⚔️\n👥 @${player1.split('@')[0]} *VS* @${player2.split('@')[0]}\n\n`;
+        messageText = header + welcomeMsg + `\n\n_(Seuls les deux duellistes peuvent jouer. Propose une lettre ou le mot complet en préfixant par *r:*, ex : *r: a* ou *r a* ou *r: Cotonou* ou *r Cotonou*)_`;
+      } else {
+        const header = `🌳 *PENDU EN GROUPE* 🌳\n\n`;
+        messageText = header + welcomeMsg + `\n\n_(Tout le monde peut participer ! Propose une lettre ou le mot complet en préfixant par *r:*, ex : *r: a* ou *r a* ou *r: Cotonou* ou *r Cotonou*)_`;
+      }
+      await this.client.sendMessage(groupJid, messageText, {
+        mentions: mode === 'challenge' && player2 ? [player1, player2] : []
+      });
+    } else if (targetGame === 'quiz') {
+      const welcomeMsg = await this.quizService.startQuiz(groupJid);
+      let messageText = '';
+      if (mode === 'challenge' && player2) {
+        const header = `⚔️ *DÉFI QUIZ* ⚔️\n👥 @${player1.split('@')[0]} *VS* @${player2.split('@')[0]}\n\n`;
+        messageText = header + welcomeMsg + `\n\n_(Seuls les deux duellistes peuvent répondre. Réponds en préfixant par *r:*, ex : *r: 1* ou *r 1* ou *r: Porto-Novo* ou *r Porto-Novo*)_`;
+      } else {
+        const header = `🧠 *QUIZ EN GROUPE* 🧠\n\n`;
+        messageText = header + welcomeMsg + `\n\n_(Tout le monde peut participer ! Réponds en préfixant par *r:*, ex : *r: 1* ou *r 1* ou *r: Porto-Novo* ou *r Porto-Novo*)_`;
+      }
+      await this.client.sendMessage(groupJid, messageText, {
+        mentions: mode === 'challenge' && player2 ? [player1, player2] : []
+      });
+    } else if (targetGame === 'emoji') {
+      const welcomeMsg = await this.emojiService.startGame(groupJid);
+      let messageText = '';
+      if (mode === 'challenge' && player2) {
+        const header = `⚔️ *DÉFI EMOJI* ⚔️\n👥 @${player1.split('@')[0]} *VS* @${player2.split('@')[0]}\n\n`;
+        messageText = header + welcomeMsg + `\n\n_(Seuls les deux duellistes peuvent répondre. Réponds en préfixant par *r:* ou *reponse:*, ex : *r: Titanic* ou *r Titanic*)_`;
+      } else {
+        const header = `🎬 *EMOJI EN GROUPE* 🎬\n\n`;
+        messageText = header + welcomeMsg + `\n\n_(Tout le monde peut participer ! Réponds en préfixant par *r:* ou *reponse:*, ex : *r: Titanic* ou *r Titanic*)_`;
+      }
+      await this.client.sendMessage(groupJid, messageText, {
+        mentions: mode === 'challenge' && player2 ? [player1, player2] : []
+      });
+    }
   }
 }
