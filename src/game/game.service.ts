@@ -97,6 +97,24 @@ export class GameService {
     });
   }
 
+  async updateGameSessionWithData(chatId: string, currentGame: string | null, gameData: any) {
+    return this.prisma.gameSession.upsert({
+      where: { chatId },
+      update: {
+        currentGame,
+        gameData: gameData || null,
+        lastActivityAt: new Date(),
+      },
+      create: {
+        chatId,
+        currentGame,
+        gameData: gameData || null,
+        lastActivityAt: new Date(),
+        history: [],
+      },
+    });
+  }
+
   async getGameSession(chatId: string) {
     return this.prisma.gameSession.findUnique({
       where: { chatId },
@@ -124,9 +142,21 @@ export class GameService {
       where: { phoneNumber },
       data: {
         playedDevinette: isDevinette ? { increment: 1 } : undefined,
-        playedActionVerite: !isDevinette ? { increment: 1 } : undefined,
+        playedActionVerite: !isDevinette && type !== QuestionType.QUIZ ? { increment: 1 } : undefined,
+        playedCount: { increment: 1 },
       },
     });
     return user.playedDevinette + user.playedActionVerite;
+  }
+
+  // Incrémente le compteur de jeux joués global de l'utilisateur
+  async incrementPlayedCount(phoneNumber: string): Promise<number> {
+    const user = await this.prisma.user.update({
+      where: { phoneNumber },
+      data: {
+        playedCount: { increment: 1 },
+      },
+    });
+    return user.playedCount;
   }
 }

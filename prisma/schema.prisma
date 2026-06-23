@@ -19,6 +19,10 @@ enum BotState {
   MAIN_MENU
   PLAYING_ACTION_VERITE
   PLAYING_DEVINETTE
+  PLAYING_PENDU
+  PLAYING_MORPION
+  PLAYING_QUIZ
+  PLAYING_EMOJI
   STOPPED
 }
 
@@ -26,6 +30,33 @@ enum QuestionType {
   ACTION
   VERITE
   DEVINETTE
+  QUIZ
+}
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+  OWNER
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum MorpionStatus {
+  WAITING
+  PLAYING
+  FINISHED
 }
 
 // --- MODELES ---
@@ -38,6 +69,9 @@ model User {
   botState           BotState  @default(START) // État actuel dans le jeu
   playedActionVerite Int       @default(0)
   playedDevinette    Int       @default(0)
+  playedCount        Int       @default(0)     // Compteur total unifié
+  role               UserRole  @default(USER)
+  isBlocked          Boolean   @default(false)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -45,11 +79,15 @@ model User {
 }
 
 model Question {
-  id        String       @id @default(uuid()) @db.Uuid
-  text      String
-  answer    String?      // Réponse attendue (séparée par | si plusieurs choix/synonymes)
-  type      QuestionType // Uniquement ACTION, VERITE ou DEVINETTE
-  createdAt DateTime     @default(now())
+  id         String       @id @default(uuid()) @db.Uuid
+  text       String
+  answer     String?      // Réponse attendue (séparée par | si plusieurs choix/synonymes)
+  type       QuestionType // Uniquement ACTION, VERITE, DEVINETTE ou QUIZ
+  category   String?      // Catégorie thématique (ex: "culture", "science")
+  difficulty Difficulty   @default(EASY)
+  language   String       @default("fr")
+  active     Boolean      @default(true)  // Soft delete
+  createdAt  DateTime     @default(now())
 
   @@map("questions")
 }
@@ -60,7 +98,48 @@ model GameSession {
   currentQuestionId String?  @db.Uuid // ID de la devinette en cours (vide si Action/Vérité)
   attempts          Int      @default(0) // Nombre de tentatives pour la devinette en cours
   history           String[] @db.Uuid // Historique pour éviter de répéter les mêmes questions
+  currentGame       String?  // Nom du jeu en cours (ex: "pendu", "morpion")
+  gameData          Json?    // Données spécifiques au jeu en cours (grille morpion, mot pendu, etc.)
+  lastActivityAt    DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@map("game_sessions")
 }
+
+model AdminLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  actorId   String   // Numéro ou ID de l'administrateur
+  action    String   // Ex: "BLOCK_USER", "ADD_QUESTION"
+  target    String   // Ex: "229XXXXXXXX" ou ID question
+  metadata  Json?    // Infos supplémentaires
+  createdAt DateTime @default(now())
+
+  @@map("admin_logs")
+}
+
+model ErrorLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  scope     String   // Partie de l'application (ex: "whatsapp.service", "quiz.service")
+  message   String
+  stack     String?  // Stack trace si dispo
+  severity  Severity
+  createdAt DateTime @default(now())
+
+  @@map("error_logs")
+}
+
+model MorpionGame {
+  id             String        @id @default(uuid()) @db.Uuid
+  inviteCode     String        @unique // Code à 6 caractères
+  player1ChatId  String        // Chat ID du joueur 1 (ex: "229XXXXX@c.us")
+  player2ChatId  String?       // Chat ID du joueur 2 (vide au début en mode multijoueur)
+  board          String        @default("         ") // 9 caractères, espaces par défaut
+  currentTurn    Int           @default(1) // 1 ou 2
+  status         MorpionStatus @default(WAITING)
+  winnerId       String?       // Chat ID du vainqueur ou "DRAW"
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@map("morpion_games")
+}
+

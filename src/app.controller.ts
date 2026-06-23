@@ -48,4 +48,23 @@ export class AppController {
   </body>
 </html>`;
   }
+
+  @Get('status')
+  getStatus() {
+    const connectedAt = this.whatsappService.getConnectedAt();
+    return {
+      status: connectedAt ? 'online' : 'offline',
+      uptime: process.uptime(),
+      connectedAt,
+      version: '2.0.0',
+    };
+  }
+
+  @Get('version')
+  getVersion() {
+    return {
+      version: '2.0.0',
+      name: 'WhatsApp Game Bot API',
+    };
+  }
 }
