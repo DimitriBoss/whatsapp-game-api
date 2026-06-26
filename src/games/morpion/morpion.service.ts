@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { GameService } from '../../game/game.service';
-import { MorpionStatus } from '@prisma/client';
+import { MorpionStatus, BotState } from '@prisma/client';
 
 interface SoloMorpionState {
   board: string; // "         " (9 chars)
@@ -65,6 +65,7 @@ export class MorpionService {
     let check = this.checkWinner(boardStr);
     if (check.status === 'WIN') {
       await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
       const reward = state.difficulty === 'HARD' ? 20 : 5;
       const newPoints = await this.gameService.incrementUserPoints(senderNumber, reward);
       return (
@@ -75,6 +76,7 @@ export class MorpionService {
       );
     } else if (check.status === 'DRAW') {
       await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
       return (
         `🤝 *ÉGALITÉ !* Belle partie.\n\n` +
         `${this.renderBoard(boardStr)}\n\n` +
@@ -93,6 +95,7 @@ export class MorpionService {
     check = this.checkWinner(boardStr);
     if (check.status === 'WIN' && check.winner === 'O') {
       await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
       return (
         `🤖 *DOMMAGE !* L'IA a gagné cette partie. 🦾\n\n` +
         `${this.renderBoard(boardStr)}\n\n` +
@@ -100,6 +103,7 @@ export class MorpionService {
       );
     } else if (check.status === 'DRAW') {
       await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
       return (
         `🤝 *ÉGALITÉ !* Belle partie.\n\n` +
         `${this.renderBoard(boardStr)}\n\n` +
@@ -220,6 +224,7 @@ export class MorpionService {
     gameId: string,
     role: 'player1' | 'player2',
     isGroup: boolean = false,
+    groupChatId?: string,
   ): Promise<{
     success: boolean;
     message: string;
@@ -302,9 +307,16 @@ export class MorpionService {
       });
 
       // Libérer les sessions
-      await this.gameService.updateGameSessionWithData(game.player1ChatId, null, null);
-      if (game.player2ChatId) {
-        await this.gameService.updateGameSessionWithData(game.player2ChatId, null, null);
+      const p1SessionKey = isGroup && groupChatId ? `${groupChatId}:${game.player1ChatId}` : game.player1ChatId;
+      const p2SessionKey = isGroup && groupChatId && game.player2ChatId ? `${groupChatId}:${game.player2ChatId}` : game.player2ChatId;
+
+      await this.gameService.updateGameSessionWithData(p1SessionKey, null, null);
+      await this.gameService.updateUserState(game.player1ChatId, BotState.MAIN_MENU);
+      if (p2SessionKey) {
+        await this.gameService.updateGameSessionWithData(p2SessionKey, null, null);
+        if (game.player2ChatId) {
+          await this.gameService.updateUserState(game.player2ChatId, BotState.MAIN_MENU);
+        }
       }
 
       const newPoints = await this.gameService.incrementUserPoints(chatId, 15);
@@ -355,9 +367,16 @@ export class MorpionService {
       });
 
       // Libérer les sessions
-      await this.gameService.updateGameSessionWithData(game.player1ChatId, null, null);
-      if (game.player2ChatId) {
-        await this.gameService.updateGameSessionWithData(game.player2ChatId, null, null);
+      const p1SessionKey = isGroup && groupChatId ? `${groupChatId}:${game.player1ChatId}` : game.player1ChatId;
+      const p2SessionKey = isGroup && groupChatId && game.player2ChatId ? `${groupChatId}:${game.player2ChatId}` : game.player2ChatId;
+
+      await this.gameService.updateGameSessionWithData(p1SessionKey, null, null);
+      await this.gameService.updateUserState(game.player1ChatId, BotState.MAIN_MENU);
+      if (p2SessionKey) {
+        await this.gameService.updateGameSessionWithData(p2SessionKey, null, null);
+        if (game.player2ChatId) {
+          await this.gameService.updateUserState(game.player2ChatId, BotState.MAIN_MENU);
+        }
       }
 
       const drawMsg =

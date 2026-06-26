@@ -108,9 +108,9 @@ export class GameService {
         const ext = existing.gameData as any;
         mergedData = {
           ...gameData,
-          mode: ext.mode || gameData.mode,
-          player1: ext.player1 || gameData.player1,
-          player2: ext.player2 || gameData.player2,
+          mode: gameData.mode !== undefined ? gameData.mode : ext.mode,
+          player1: gameData.player1 !== undefined ? gameData.player1 : ext.player1,
+          player2: gameData.player2 !== undefined ? gameData.player2 : ext.player2,
         };
       }
     }

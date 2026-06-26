@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { GameService } from '../../game/game.service';
+import { BotState } from '@prisma/client';
 
 interface EmojiChallenge {
   emojis: string;
@@ -92,6 +93,7 @@ export class EmojiService {
     if (isCorrect) {
       // Victoire !
       await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
       await this.gameService.incrementPlayedCount(senderNumber);
       const newPoints = await this.gameService.incrementUserPoints(senderNumber, 10);
 
@@ -106,6 +108,7 @@ export class EmojiService {
       if (state.attempts >= 3) {
         // Défaite
         await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+        await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
         return (
           `❌ *Dommage !* C'était ta dernière tentative.\n` +
           `La bonne réponse était : *${challenge.displayAnswer}*.\n\n` +

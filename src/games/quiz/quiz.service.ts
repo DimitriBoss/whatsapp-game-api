@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { GameService } from '../../game/game.service';
-import { QuestionType } from '@prisma/client';
+import { QuestionType, BotState } from '@prisma/client';
 
 interface QuizState {
   questionIds: string[];
@@ -107,6 +107,7 @@ export class QuizService {
     // Vérifier si le quiz est fini
     if (state.currentIndex >= state.total) {
       await this.gameService.updateGameSessionWithData(sessionKey, null, null);
+      await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
       
       // Incrémenter le compteur de jeu de l'utilisateur
       await this.gameService.incrementPlayedCount(senderNumber);
