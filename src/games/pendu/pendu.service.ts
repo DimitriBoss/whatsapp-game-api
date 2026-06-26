@@ -8,7 +8,7 @@ interface PenduState {
   guessedLetters: string[]; // Lettres déjà essayées
   errors: number; // Nombre d'erreurs (max 7)
 }
-
+//comment  je peut
 @Injectable()
 export class PenduService {
   constructor(private gameService: GameService) {}
@@ -184,7 +184,10 @@ export class PenduService {
           null,
           null,
         );
-        await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+        await this.gameService.updateUserState(
+          senderNumber,
+          BotState.MAIN_MENU,
+        );
         const newPoints = await this.gameService.incrementUserPoints(
           senderNumber,
           15,
@@ -205,7 +208,10 @@ export class PenduService {
             null,
             null,
           );
-          await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+          await this.gameService.updateUserState(
+            senderNumber,
+            BotState.MAIN_MENU,
+          );
           return (
             `💀 *PENDU !* Le mot secret était : *${state.originalWord}*.\n\n` +
             `${this.renderHangman(7)}\n\n` +
@@ -258,7 +264,10 @@ export class PenduService {
           null,
           null,
         );
-        await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+        await this.gameService.updateUserState(
+          senderNumber,
+          BotState.MAIN_MENU,
+        );
         const newPoints = await this.gameService.incrementUserPoints(
           senderNumber,
           15,
@@ -291,7 +300,10 @@ export class PenduService {
           null,
           null,
         );
-        await this.gameService.updateUserState(senderNumber, BotState.MAIN_MENU);
+        await this.gameService.updateUserState(
+          senderNumber,
+          BotState.MAIN_MENU,
+        );
         return (
           `💀 *PENDU !* Tu as perdu.\n` +
           `Le mot secret était : *${state.originalWord}*.\n\n` +
